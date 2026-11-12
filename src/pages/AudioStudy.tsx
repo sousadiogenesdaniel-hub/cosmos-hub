@@ -3,7 +3,8 @@ import { Link, useParams } from 'react-router-dom';
 import type { Grade } from 'ts-fsrs';
 import { deckPath, signedUrl } from '../lib/api';
 import { cardFaces } from '../lib/cards';
-import { RATINGS } from '../lib/srs';
+import { RATINGS, previewIntervals } from '../lib/srs';
+import { fmtInterval } from '../lib/dates';
 import { useApp } from '../lib/context';
 import { useStudySession } from '../lib/useStudySession';
 import { Finished } from './Study';
@@ -12,9 +13,17 @@ type Phase = 'question' | 'thinking' | 'answer' | 'rating';
 type After = 'wait' | 'auto' | 'listen';
 
 const PREF = 'cosmos:audioPrefs';
-function loadPrefs(): { tts: boolean; after: After } {
-  try { return { tts: true, after: 'wait', ...JSON.parse(localStorage.getItem(PREF) || '{}') }; } catch { return { tts: true, after: 'wait' }; }
+interface Prefs { tts: boolean; after: After; gap: number }
+const DEFAULT_PREFS: Prefs = { tts: true, after: 'wait', gap: 5 };
+function loadPrefs(): Prefs {
+  try { return { ...DEFAULT_PREFS, ...JSON.parse(localStorage.getItem(PREF) || '{}') }; } catch { return DEFAULT_PREFS; }
 }
+
+const MODES: { value: After; title: string; desc: string }[] = [
+  { value: 'wait', title: 'Eu avalio', desc: 'Depois da resposta, você toca em Errei / Difícil / Bom / Fácil.' },
+  { value: 'auto', title: 'Mãos livres', desc: 'Depois da resposta, o card conta como "Bom" sozinho e vem o próximo. Se não souber, toque em Errei na pausa.' },
+  { value: 'listen', title: 'Só ouvir', desc: 'Só passa os cards, sem mexer no agendamento (não conta como revisão).' },
+];
 
 const PHASE_LABEL: Record<Phase, string> = {
   question: 'Pergunta',
@@ -42,6 +51,7 @@ export default function AudioStudy() {
   const thinkRef = useRef(think); thinkRef.current = think;
   const prefsRef = useRef(prefs); prefsRef.current = prefs;
   const busy = useRef(false);
+  const skipThink = useRef(false);
 
   useEffect(() => { if (profile) setThink(profile.audio_think_seconds); }, [profile]);
   useEffect(() => { try { localStorage.setItem(PREF, JSON.stringify(prefs)); } catch { /* ignore */ } }, [prefs]);
@@ -101,15 +111,16 @@ export default function AudioStudy() {
     const my = ++token.current;
     const alive = () => token.current === my;
     cardStart.current = Date.now();
+    skipThink.current = false;
     (async () => {
       const f = cardFaces(note, current.ord);
       setPhase('question');
       await play(f.questionAudio, f.questionText, alive);
       if (!alive()) return;
       setPhase('thinking');
-      for (let s = thinkRef.current; s > 0; s--) {
+      for (let s = thinkRef.current; s > 0 && !skipThink.current; s--) {
         setCountdown(s);
-        await wait(1000, alive);
+        await wait(1000, () => alive() && !skipThink.current);
         if (!alive()) return;
       }
       setPhase('answer');
@@ -117,13 +128,10 @@ export default function AudioStudy() {
       if (!alive()) return;
       setPhase('rating');
       const after = prefsRef.current.after;
-      if (after === 'auto') {
-        for (let s = 5; s > 0; s--) { setCountdown(s); await wait(1000, alive); if (!alive()) return; }
-        doRate(3 as Grade);
-      } else if (after === 'listen') {
-        await wait(1500, alive);
-        if (alive()) dismiss();
-      }
+      if (after === 'wait') return;
+      for (let s = Math.max(1, prefsRef.current.gap); s > 0; s--) { setCountdown(s); await wait(1000, alive); if (!alive()) return; }
+      if (after === 'auto') doRate(3 as Grade);
+      else dismiss();
     })();
     return () => { token.current++; stopAll(); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -157,6 +165,8 @@ export default function AudioStudy() {
   if (!current || !note) return <Finished title={title} stats={stats} deckId={deckId} />;
 
   const faces = cardFaces(note, current.ord);
+  const now = new Date();
+  const intervals = previewIntervals(current, now);
   const withAudio = queue.length;
 
   return (
@@ -178,21 +188,27 @@ export default function AudioStudy() {
               <input type="range" min={3} max={60} value={think} onChange={(e) => setThink(Number(e.target.value))} />
             </label>
             <label className="check"><input type="checkbox" checked={prefs.tts} onChange={(e) => setPrefs({ ...prefs, tts: e.target.checked })} /> Ler o texto em voz alta quando o card não tiver áudio</label>
-            <label>Depois da resposta
-              <select value={prefs.after} onChange={(e) => setPrefs({ ...prefs, after: e.target.value as After })}>
-                <option value="wait">Esperar eu avaliar (Errei / Difícil / Bom / Fácil)</option>
-                <option value="auto">Marcar "Bom" sozinho após 5 s (mãos livres)</option>
-                <option value="listen">Só ouvir — não conta como revisão</option>
-              </select>
-            </label>
+            <div className="mode-pick" role="radiogroup" aria-label="Depois da resposta">
+              {MODES.map((m) => (
+                <button key={m.value} type="button" role="radio" aria-checked={prefs.after === m.value}
+                  className={`mode-opt${prefs.after === m.value ? ' on' : ''}`} onClick={() => setPrefs({ ...prefs, after: m.value })}>
+                  <strong>{m.title}</strong><span>{m.desc}</span>
+                </button>
+              ))}
+            </div>
+            {prefs.after !== 'wait' && (
+              <label>Pausa até o próximo card: <strong>{prefs.gap}s</strong>
+                <input type="range" min={1} max={20} value={prefs.gap} onChange={(e) => setPrefs({ ...prefs, gap: Number(e.target.value) })} />
+              </label>
+            )}
             <p className="muted small">Fone com botões: ⏭ avançar = Bom · ⏮ voltar = Errei · ⏯ pausa.</p>
             <button className="btn primary big" onClick={() => setRunning(true)}>▶ Começar</button>
           </div>
         ) : (
           <>
             <div className={`audio-orb ${phase}`}>
-              <span className="orb-label">{PHASE_LABEL[phase]}</span>
-              {(phase === 'thinking' || (phase === 'rating' && prefs.after === 'auto')) && <span className="orb-count">{countdown}</span>}
+              <span className="orb-label">{phase === 'rating' && prefs.after !== 'wait' ? 'Próximo card em' : PHASE_LABEL[phase]}</span>
+              {(phase === 'thinking' || (phase === 'rating' && prefs.after !== 'wait')) && <span className="orb-count">{countdown}</span>}
             </div>
             <button className="btn small link" onClick={() => setShowText(!showText)}>{showText ? 'Esconder texto' : 'Mostrar texto'}</button>
             {showText && (
@@ -206,10 +222,8 @@ export default function AudioStudy() {
               <button className="btn ghost" onClick={() => setReplay((r) => r + 1)}>↺ Repetir card</button>
               {phase !== 'answer' && phase !== 'rating' && (
                 <button className="btn ghost" onClick={() => {
-                  stopAll();
-                  const my = ++token.current;
-                  setPhase('answer');
-                  play(faces.answerAudio, faces.answerText, () => token.current === my).then(() => { if (token.current === my) setPhase('rating'); });
+                  skipThink.current = true;
+                  if (phase === 'question') stopAll();
                 }}>⏩ Resposta já</button>
               )}
             </div>
@@ -221,7 +235,10 @@ export default function AudioStudy() {
         <footer className="study-actions">
           <div className="ratings big-touch">
             {RATINGS.map((r) => (
-              <button key={r.grade} className={`rate ${r.cls}`} onClick={() => doRate(r.grade)}><span>{r.label}</span></button>
+              <button key={r.grade} className={`rate ${r.cls}`} onClick={() => doRate(r.grade)}>
+                <span className="rate-int">{fmtInterval(now, intervals[r.grade])}</span>
+                <span>{r.label}</span>
+              </button>
             ))}
           </div>
         </footer>

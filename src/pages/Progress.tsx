@@ -64,6 +64,8 @@ export default function Progress() {
   }
   const docRows = [...docStats.entries()].sort((a, b) => b[1].pages - a[1].pages);
   const todayReading = reading.filter((r) => r.day === today && r.seconds >= PAGE_MIN_SECONDS);
+  const pages7 = reading.filter((r) => r.day >= addDays(today, -6) && r.seconds >= PAGE_MIN_SECONDS).length;
+  const finishedInPeriod = docs.filter((d) => d.finished_at && d.finished_at.slice(0, 10) >= sinceDay).length;
 
   const chartDays = dayRange(today, Math.min(period, 90));
   const describe = (day: string) => {
@@ -86,6 +88,7 @@ export default function Progress() {
         <div className="kpi"><span className="kpi-l">Últimos 7 dias</span><span className="kpi-v">{count(addDays(today, -6))}</span></div>
         <div className="kpi"><span className="kpi-l">Últimos 30 dias</span><span className="kpi-v">{count(addDays(today, -29))}</span></div>
         <div className="kpi"><span className="kpi-l">Páginas hoje</span><span className="kpi-v">{todayReading.length}</span></div>
+        <div className="kpi"><span className="kpi-l">Páginas em 7 dias</span><span className="kpi-v">{pages7}</span></div>
       </section>
 
       <section className="panel">
@@ -104,6 +107,7 @@ export default function Progress() {
         <div className="kpi"><span className="kpi-l">Tempo nos cards</span><span className="kpi-v">{fmtDuration(reviewMs)}</span></div>
         <div className="kpi"><span className="kpi-l">Tempo lendo</span><span className="kpi-v">{fmtDuration(readingMs)}</span></div>
         <div className="kpi"><span className="kpi-l">Páginas lidas</span><span className="kpi-v">{pages}</span></div>
+        <div className="kpi"><span className="kpi-l">Arquivos concluídos</span><span className="kpi-v">{finishedInPeriod}</span></div>
         <div className="kpi"><span className="kpi-l">Dias com estudo</span><span className="kpi-v">{activeDays}<small>/{period}</small></span></div>
       </section>
 
@@ -145,6 +149,7 @@ export default function Progress() {
 
       <section className="panel">
         <h2>Leitura por arquivo</h2>
+        <p className="muted small">Uma página conta como lida quando fica pelo menos {PAGE_MIN_SECONDS} segundos na tela. Para ver o gráfico de páginas por dia, use o botão "Páginas" no gráfico acima.</p>
         {docRows.length === 0 ? <p className="muted">Nenhuma leitura registrada neste período.</p> : (
           <div className="table-wrap">
             <table className="table">
@@ -152,7 +157,7 @@ export default function Progress() {
               <tbody>
                 {docRows.map(([id, s]) => (
                   <tr key={id}>
-                    <td>{docs.find((d) => d.id === id)?.title ?? 'Arquivo apagado'}</td>
+                    <td>{docs.find((d) => d.id === id)?.title ?? 'Arquivo apagado'}{docs.find((d) => d.id === id)?.finished_at && <span className="lido-badge static">LIDO!</span>}</td>
                     <td className="num">{s.pages}</td>
                     <td className="num">{fmtDuration(s.secs * 1000)}</td>
                     <td className="num">{todayReading.filter((r) => r.document_id === id).length}</td>

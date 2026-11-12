@@ -1,17 +1,27 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { DOC_KINDS, kindLabel, type DocumentRow } from '../lib/types';
 import { createDocument, deleteDocument, listDocuments, updateDocument } from '../lib/api';
 import { useAction } from '../lib/context';
 import Modal from '../components/Modal';
+import HighlightsView from '../components/HighlightsView';
 
 const MAX_MB = 50;
+
+type Status = '' | 'new' | 'reading' | 'done';
+export function docStatus(d: DocumentRow): Exclude<Status, ''> {
+  if (d.finished_at) return 'done';
+  return d.last_opened_at ? 'reading' : 'new';
+}
 
 export default function Library() {
   const [docs, setDocs] = useState<DocumentRow[] | null>(null);
   const [kind, setKind] = useState('');
   const [subject, setSubject] = useState('');
   const [q, setQ] = useState('');
+  const [status, setStatus] = useState<Status>('');
+  const [params, setParams] = useSearchParams();
+  const tab = params.get('tab') === 'grifos' ? 'grifos' : 'arquivos';
   const [uploading, setUploading] = useState(false);
   const [editing, setEditing] = useState<DocumentRow | null>(null);
   const run = useAction();
@@ -24,12 +34,13 @@ export default function Library() {
   const filtered = useMemo(() => (docs ?? []).filter((d) => {
     if (kind && d.kind !== kind) return false;
     if (subject && d.subject !== subject) return false;
+    if (status && docStatus(d) !== status) return false;
     if (q) {
       const hay = `${d.title} ${d.subject ?? ''} ${d.tags.join(' ')}`.toLowerCase();
       if (!hay.includes(q.toLowerCase())) return false;
     }
     return true;
-  }), [docs, kind, subject, q]);
+  }), [docs, kind, subject, q, status]);
 
   const grouped = useMemo(() => {
     const map = new Map<string, DocumentRow[]>();
@@ -52,6 +63,13 @@ export default function Library() {
         <button className="btn primary" onClick={() => setUploading(true)}>＋ Adicionar arquivo</button>
       </header>
 
+      <div className="tabs" role="tablist">
+        <button role="tab" aria-selected={tab === 'arquivos'} className={`tab${tab === 'arquivos' ? ' on' : ''}`} onClick={() => setParams({}, { replace: true })}>▤ Arquivos</button>
+        <button role="tab" aria-selected={tab === 'grifos'} className={`tab${tab === 'grifos' ? ' on' : ''}`} onClick={() => setParams({ tab: 'grifos' }, { replace: true })}>🖍 Grifos</button>
+      </div>
+
+      {tab === 'grifos' ? <HighlightsView docs={docs ?? []} /> : <>
+
       <div className="filters">
         <input type="search" placeholder="Buscar por título, matéria ou tag…" value={q} onChange={(e) => setQ(e.target.value)} />
         <div className="chips">
@@ -66,6 +84,12 @@ export default function Library() {
             {subjects.map((s) => <option key={s}>{s}</option>)}
           </select>
         )}
+        <select value={status} onChange={(e) => setStatus(e.target.value as Status)} aria-label="Status de leitura">
+          <option value="">Qualquer status</option>
+          <option value="new">Não iniciados</option>
+          <option value="reading">Lendo</option>
+          <option value="done">Lidos</option>
+        </select>
       </div>
 
       {docs === null ? <div className="center-pad"><div className="spinner" /></div> : docs.length === 0 ? (
@@ -82,6 +106,7 @@ export default function Library() {
           </div>
         </section>
       ))}
+      </>}
 
       {uploading && <UploadModal subjects={subjects} onClose={() => setUploading(false)} onDone={() => { setUploading(false); load(); }} />}
       {editing && <EditModal doc={editing} subjects={subjects} onClose={() => setEditing(null)} onDone={() => { setEditing(null); load(); }} />}
@@ -90,18 +115,20 @@ export default function Library() {
 }
 
 function DocCard({ d, onEdit }: { d: DocumentRow; onEdit: () => void }) {
-  const progress = d.page_count ? Math.min(1, d.last_page / d.page_count) : 0;
+  const done = !!d.finished_at;
+  const progress = done ? 1 : d.page_count ? Math.min(1, d.last_page / d.page_count) : 0;
   return (
-    <div className="doc-card">
+    <div className={`doc-card${done ? ' done' : ''}`}>
       <Link to={`/ler/${d.id}`} className="doc-main">
         <div className={`doc-icon ${d.file_type}`}>{d.file_type === 'pdf' ? 'PDF' : 'DOC'}</div>
         <div className="doc-info">
           <div className="doc-title">{d.title}</div>
+          {done && <span className="lido-badge static">LIDO!</span>}
           <div className="muted small">{kindLabel(d.kind)}{d.page_count ? ` · p. ${d.last_page} de ${d.page_count}` : ''}</div>
           {d.tags.length > 0 && <div className="tags">{d.tags.map((t) => <span key={t} className="tag">{t}</span>)}</div>}
         </div>
       </Link>
-      {d.page_count ? <div className="progress thin"><div style={{ width: `${progress * 100}%` }} /></div> : null}
+      {d.page_count || done ? <div className={`progress thin${done ? ' done' : ''}`}><div style={{ width: `${progress * 100}%` }} /></div> : null}
       <button className="icon-btn doc-edit" onClick={onEdit} title="Editar informações">⋯</button>
     </div>
   );
@@ -189,11 +216,13 @@ function EditModal({ doc, subjects, onClose, onDone }: { doc: DocumentRow; subje
   const [kind, setKind] = useState(doc.kind);
   const [subject, setSubject] = useState(doc.subject ?? '');
   const [tags, setTags] = useState(doc.tags.join(', '));
+  const [finished, setFinished] = useState(!!doc.finished_at);
   const run = useAction();
 
   async function save(e: FormEvent) {
     e.preventDefault();
-    const ok = await run(() => updateDocument(doc.id, { title: title.trim() || doc.title, kind, subject: subject.trim() || null, tags: parseTags(tags) }).then(() => true), 'Salvo');
+    const ok = await run(() => updateDocument(doc.id, { title: title.trim() || doc.title, kind, subject: subject.trim() || null, tags: parseTags(tags),
+      finished_at: finished ? doc.finished_at ?? new Date().toISOString() : null }).then(() => true), 'Salvo');
     if (ok) onDone();
   }
 
@@ -208,6 +237,7 @@ function EditModal({ doc, subjects, onClose, onDone }: { doc: DocumentRow; subje
       <form className="stack" onSubmit={save}>
         <label>Título<input value={title} onChange={(e) => setTitle(e.target.value)} /></label>
         <MetaFields {...{ kind, setKind, subject, setSubject, tags, setTags, subjects }} />
+        <label className="check"><input type="checkbox" checked={finished} onChange={(e) => setFinished(e.target.checked)} /> Já terminei de ler (LIDO!)</label>
         <div className="row between">
           <button type="button" className="btn danger ghost" onClick={remove}>Apagar arquivo</button>
           <div className="row gap-s">

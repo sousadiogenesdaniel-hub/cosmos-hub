@@ -1,7 +1,7 @@
 import { supabase, BUCKET } from './supabase';
 import { cardOrds } from './cards';
 import { localDay } from './dates';
-import type { CardRow, DailyMust, Deck, DocumentRow, Note, NoteType, Profile, ReadingLog, ReviewLog } from './types';
+import type { CardRow, DailyMust, Deck, DocumentRow, Highlight, Note, NoteType, Profile, ReadingLog, ReviewLog } from './types';
 import type { SchedulingFields } from './srs';
 
 function check<T>(res: { data: T | null; error: { message: string } | null }): T {
@@ -242,4 +242,25 @@ export async function createMust(m: Omit<DailyMust, 'id'>) {
 
 export async function deleteMust(id: string) {
   check(await supabase.from('daily_musts').delete().eq('id', id));
+}
+
+// -------------------------------------------------------------- Grifos
+export async function listHighlights(documentId?: string): Promise<Highlight[]> {
+  return fetchAll<Highlight>((f, t) => {
+    let q = supabase.from('highlights').select('*');
+    if (documentId) q = q.eq('document_id', documentId);
+    return q.order('page').order('created_at').range(f, t);
+  });
+}
+
+export async function createHighlight(h: Pick<Highlight, 'document_id' | 'page' | 'text' | 'color' | 'position'>): Promise<Highlight> {
+  return check(await supabase.from('highlights').insert(h).select('*').single()) as Highlight;
+}
+
+export async function updateHighlight(id: string, patch: Partial<Pick<Highlight, 'color' | 'comment'>>): Promise<Highlight> {
+  return check(await supabase.from('highlights').update({ ...patch, updated_at: new Date().toISOString() }).eq('id', id).select('*').single()) as Highlight;
+}
+
+export async function deleteHighlight(id: string) {
+  check(await supabase.from('highlights').delete().eq('id', id));
 }

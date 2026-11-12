@@ -23,6 +23,7 @@ export interface DocumentRow {
   page_count: number | null;
   last_page: number;
   last_opened_at: string | null;
+  finished_at: string | null;
   created_at: string;
 }
 
@@ -110,3 +111,26 @@ export const DOC_KINDS: { value: string; label: string }[] = [
 ];
 
 export const kindLabel = (k: string) => DOC_KINDS.find((d) => d.value === k)?.label ?? k;
+
+export type HighlightColor = 'yellow' | 'green' | 'blue' | 'pink';
+
+export const HIGHLIGHT_COLORS: { value: HighlightColor; label: string }[] = [
+  { value: 'yellow', label: 'Amarelo' },
+  { value: 'green', label: 'Verde' },
+  { value: 'blue', label: 'Azul' },
+  { value: 'pink', label: 'Rosa' },
+];
+
+export interface HlRect { p: number; x: number; y: number; w: number; h: number }
+
+export interface Highlight {
+  id: string;
+  document_id: string;
+  page: number;
+  text: string;
+  color: HighlightColor;
+  comment: string | null;
+  position: { rects?: HlRect[]; offset?: number; length?: number };
+  created_at: string;
+  updated_at: string;
+}

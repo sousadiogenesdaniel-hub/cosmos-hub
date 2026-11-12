@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
-import type { DocumentRow } from '../lib/types';
-import { downloadFile, getDocument, updateDocument } from '../lib/api';
-import { useApp } from '../lib/context';
+import type { DocumentRow, Highlight, HighlightColor } from '../lib/types';
+import { createHighlight, downloadFile, getDocument, listHighlights, updateDocument } from '../lib/api';
+import { docxPositionFromRange, pdfRectsFromRange } from '../lib/highlights';
+import HighlightPopover, { ColorDots } from '../components/HighlightPopover';
+import { useApp, useAction } from '../lib/context';
 import { useReadingTracker } from '../lib/useReadingTracker';
 import PdfViewer from '../components/PdfViewer';
 import DocxViewer from '../components/DocxViewer';
@@ -38,6 +40,11 @@ export default function Reader() {
   const [prefill, setPrefill] = useState<Prefill | undefined>(undefined);
   const [injection, setInjection] = useState<Injection | null>(null);
   const [gotoInput, setGotoInput] = useState('');
+  const [highlights, setHighlights] = useState<Highlight[]>([]);
+  const [hlPop, setHlPop] = useState<{ hl: Highlight; x: number; y: number } | null>(null);
+  const [endDismissed, setEndDismissed] = useState(false);
+  const run = useAction();
+  const focusId = params.get('hl');
   const viewerRef = useRef<HTMLDivElement>(null);
   const startPage = Number(params.get('page')) || 0;
 
@@ -48,6 +55,7 @@ export default function Reader() {
         const d = await getDocument(docId);
         setDoc(d);
         setPage(startPage || d.last_page || 1);
+        listHighlights(d.id).then(setHighlights).catch(() => {});
         setData(await downloadFile(d.file_path));
         updateDocument(d.id, { last_opened_at: new Date().toISOString() }).catch(() => {});
       } catch (e) {
@@ -109,6 +117,36 @@ export default function Reader() {
     clearSelection();
   }
 
+  async function addHighlight(color: HighlightColor) {
+    const s = window.getSelection();
+    const root = viewerRef.current;
+    if (!sel || !doc || !s || !s.rangeCount || !root) return;
+    const range = s.getRangeAt(0);
+    let position: Highlight['position'] | null = null;
+    if (doc.file_type === 'pdf') {
+      const rects = pdfRectsFromRange(range, root);
+      if (rects.length) position = { rects };
+    } else {
+      const article = root.querySelector<HTMLElement>('.docx-page');
+      if (article) position = docxPositionFromRange(range, article);
+    }
+    if (!position) { toast('Não consegui marcar esse trecho. Tente selecionar de novo.', 'error'); return; }
+    const page = position.rects ? Math.min(...position.rects.map((r) => r.p)) : sel.page;
+    const text = sel.text;
+    clearSelection();
+    const h = await run(() => createHighlight({ document_id: doc.id, page, text, color, position: position! }));
+    if (h) setHighlights((list) => [...list, h]);
+  }
+
+  const onHighlightClick = useCallback((hl: Highlight, x: number, y: number) => setHlPop({ hl, x, y }), []);
+
+  async function setFinished(done: boolean) {
+    if (!doc) return;
+    const finished_at = done ? new Date().toISOString() : null;
+    const ok = await run(() => updateDocument(doc.id, { finished_at }).then(() => true), done ? 'Marcado como LIDO! 🎉' : 'Desmarcado');
+    if (ok) setDoc({ ...doc, finished_at });
+  }
+
   function inject(target: 'front' | 'back') {
     if (!sel) return;
     setInjection({ target, text: sel.text, nonce: Date.now() });
@@ -139,12 +177,17 @@ export default function Reader() {
 
   const isPdf = doc?.file_type === 'pdf';
   const pageLabel = isPdf ? 'Página' : 'Página aprox.';
+  const atEnd = !!pageCount && page >= pageCount;
+  const hlProps = { highlights, focusId, onHighlightClick };
 
   return (
     <div className={`reader${editorOpen ? ' with-editor' : ''}`}>
       <header className="reader-bar">
         <Link to="/biblioteca" className="icon-btn" title="Voltar à biblioteca">←</Link>
-        <div className="reader-title" title={doc?.title}>{doc?.title ?? 'Carregando…'}</div>
+        <div className="reader-title" title={doc?.title}>
+          {doc?.title ?? 'Carregando…'}
+          {doc?.finished_at && <button className="lido-badge" title="Clique para desmarcar" onClick={() => setFinished(false)}>LIDO!</button>}
+        </div>
         <div className="reader-tools">
           <form className="page-jump" onSubmit={(e) => { e.preventDefault(); jump(); }}>
             <span className="muted small hide-sm">{pageLabel}</span>
@@ -162,6 +205,11 @@ export default function Reader() {
               ✂ <span className="hide-sm">{cropMode ? 'Arraste na página…' : 'Recortar área'}</span>
             </button>
           )}
+          {doc && (
+            <Link className="btn small ghost" to={`/biblioteca?tab=grifos&doc=${doc.id}`} title="Ver todos os grifos deste arquivo">
+              🖍 <span className="hide-sm">Grifos</span>{highlights.length > 0 && <span className="pill">{highlights.length}</span>}
+            </Link>
+          )}
           <button className="btn small primary" onClick={() => newCardFrom()}>＋ <span className="hide-sm">Novo card</span></button>
         </div>
       </header>
@@ -170,12 +218,19 @@ export default function Reader() {
         <div className="viewer" ref={viewerRef}>
           {data && doc && (isPdf ? (
             <PdfViewer data={data} initialPage={page} zoom={zoom} cropMode={cropMode} goto={goto}
-              onPageChange={setPage} onPageCount={onPageCount} onCrop={onCrop} onError={setError} />
+              onPageChange={setPage} onPageCount={onPageCount} onCrop={onCrop} onError={setError} {...hlProps} />
           ) : (
             <DocxViewer data={data} initialPage={page} zoom={zoom} goto={goto}
-              onPageChange={setPage} onPageCount={onPageCount} onError={setError} />
+              onPageChange={setPage} onPageCount={onPageCount} onError={setError} {...hlProps} />
           ))}
           {!data && !error && <div className="center-pad"><div className="spinner" /><p className="muted">Baixando arquivo…</p></div>}
+          {atEnd && doc && !doc.finished_at && !endDismissed && (
+            <div className="end-banner">
+              <span>🎉 Você chegou ao fim do arquivo.</span>
+              <button className="btn small primary" onClick={() => setFinished(true)}>Marcar como LIDO!</button>
+              <button className="icon-btn" onClick={() => setEndDismissed(true)} aria-label="Agora não">✕</button>
+            </div>
+          )}
         </div>
 
         {editorOpen && (
@@ -194,6 +249,8 @@ export default function Reader() {
 
       {sel && (
         <div className="sel-pop" style={{ left: sel.x, top: sel.y }} onMouseDown={(e) => e.preventDefault()}>
+          <ColorDots onPick={addHighlight} />
+          <span className="sel-sep" />
           {editorOpen ? (
             <>
               <button className="btn small" onClick={() => inject('front')}>→ Frente</button>
@@ -204,6 +261,13 @@ export default function Reader() {
             <button className="btn small primary" onClick={() => newCardFrom(sel.text, undefined, sel.page)}>⚡ Gerar flashcard</button>
           )}
         </div>
+      )}
+      {hlPop && (
+        <HighlightPopover hl={hlPop.hl} x={hlPop.x} y={hlPop.y}
+          onChange={(h) => { setHighlights((l) => l.map((x) => (x.id === h.id ? h : x))); setHlPop((p) => (p ? { ...p, hl: h } : p)); }}
+          onDeleted={(id) => setHighlights((l) => l.filter((x) => x.id !== id))}
+          onCard={(h) => newCardFrom(h.text, undefined, h.page)}
+          onClose={() => setHlPop(null)} />
       )}
     </div>
   );

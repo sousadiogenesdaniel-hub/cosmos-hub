@@ -1,7 +1,9 @@
-import { memo, useEffect, useRef, useState, type PointerEvent as RPointerEvent } from 'react';
+import { memo, useEffect, useMemo, useRef, useState, type PointerEvent as RPointerEvent } from 'react';
 import * as pdfjs from 'pdfjs-dist';
 import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import type { PDFDocumentProxy } from 'pdfjs-dist';
+import type { Highlight } from '../lib/types';
+import { hitRect } from '../lib/highlights';
 
 pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
 
@@ -15,9 +17,14 @@ interface Props {
   onPageCount: (n: number) => void;
   onCrop: (blob: Blob, page: number) => void;
   onError: (msg: string) => void;
+  highlights: Highlight[];
+  focusId: string | null;
+  onHighlightClick: (h: Highlight, x: number, y: number) => void;
 }
 
-export default function PdfViewer({ data, initialPage, zoom, cropMode, goto, onPageChange, onPageCount, onCrop, onError }: Props) {
+const NO_HL: Highlight[] = [];
+
+export default function PdfViewer({ data, initialPage, zoom, cropMode, goto, onPageChange, onPageCount, onCrop, onError, highlights, focusId, onHighlightClick }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [pdf, setPdf] = useState<PDFDocumentProxy | null>(null);
   const [base, setBase] = useState<{ w: number; h: number } | null>(null);
@@ -63,6 +70,14 @@ export default function PdfViewer({ data, initialPage, zoom, cropMode, goto, onP
     prevScale.current = scale;
   }, [scale]);
 
+  const byPage = useMemo(() => {
+    const m = new Map<number, Highlight[]>();
+    for (const h of highlights) {
+      for (const p of new Set((h.position.rects ?? []).map((r) => r.p))) m.set(p, [...(m.get(p) ?? []), h]);
+    }
+    return m;
+  }, [highlights]);
+
   const pageH = base ? base.h * scale : 0;
   const GAP = 16;
 
@@ -95,7 +110,8 @@ export default function PdfViewer({ data, initialPage, zoom, cropMode, goto, onP
     <div ref={scrollRef} className={`viewer-scroll${cropMode ? ' crop-mode' : ''}`} onScroll={onScroll}>
       <div className="pdf-pages">
         {Array.from({ length: pdf.numPages }, (_, i) => (
-          <PdfPage key={i + 1} pdf={pdf} num={i + 1} scale={scale} baseW={base.w} baseH={base.h} root={scrollRef} cropMode={cropMode} onCrop={onCrop} />
+          <PdfPage key={i + 1} pdf={pdf} num={i + 1} scale={scale} baseW={base.w} baseH={base.h} root={scrollRef} cropMode={cropMode} onCrop={onCrop}
+            hls={byPage.get(i + 1) ?? NO_HL} focusId={focusId} onHighlightClick={onHighlightClick} />
         ))}
       </div>
     </div>
@@ -111,9 +127,12 @@ interface PageProps {
   root: React.RefObject<HTMLDivElement | null>;
   cropMode: boolean;
   onCrop: (blob: Blob, page: number) => void;
+  hls: Highlight[];
+  focusId: string | null;
+  onHighlightClick: (h: Highlight, x: number, y: number) => void;
 }
 
-const PdfPage = memo(function PdfPage({ pdf, num, scale, baseW, baseH, root, cropMode, onCrop }: PageProps) {
+const PdfPage = memo(function PdfPage({ pdf, num, scale, baseW, baseH, root, cropMode, onCrop, hls, focusId, onHighlightClick }: PageProps) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const textRef = useRef<HTMLDivElement>(null);
@@ -193,10 +212,29 @@ const PdfPage = memo(function PdfPage({ pdf, num, scale, baseW, baseH, root, cro
     out.toBlob((b) => b && onCrop(b, num), 'image/png');
   }
 
+  // clique (sem seleção) em cima de um grifo abre as opções dele
+  function onClick(e: React.MouseEvent) {
+    if (cropMode || !hls.length) return;
+    const s = window.getSelection();
+    if (s && !s.isCollapsed) return;
+    const r = wrapRef.current!.getBoundingClientRect();
+    const x = (e.clientX - r.left) / r.width, y = (e.clientY - r.top) / r.height;
+    const hit = [...hls].reverse().find((h) => hitRect(h.position.rects, num, x, y));
+    if (hit) onHighlightClick(hit, e.clientX, e.clientY);
+  }
+
   return (
-    <div ref={wrapRef} className="pdf-page" data-page={num}
+    <div ref={wrapRef} className={`pdf-page${hls.length ? ' has-hl' : ''}`} data-page={num} onClick={onClick}
       style={{ width: w, height: h, ['--scale-factor' as string]: scale, ['--total-scale-factor' as string]: scale }}>
       <canvas ref={canvasRef} style={{ width: w, height: h }} />
+      {hls.length > 0 && (
+        <div className="hl-layer" aria-hidden>
+          {hls.flatMap((hl) => (hl.position.rects ?? []).filter((r) => r.p === num).map((r, i) => (
+            <div key={`${hl.id}-${i}`} className={`hl hl-${hl.color}${hl.id === focusId ? ' hl-flash' : ''}`}
+              style={{ left: `${r.x * 100}%`, top: `${r.y * 100}%`, width: `${r.w * 100}%`, height: `${r.h * 100}%` }} />
+          )))}
+        </div>
+      )}
       <div ref={textRef} className="textLayer" />
       {cropMode && (
         <div className="crop-overlay"
