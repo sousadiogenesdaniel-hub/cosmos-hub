@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { HIGHLIGHT_COLORS, type DocumentRow, type Highlight, type HighlightColor } from '../lib/types';
+import { HIGHLIGHT_COLORS, type DocumentRow, type Highlight } from '../lib/types';
+import { PERIODS, filterHighlights, filterQuery, readFilter, type HlFilter } from '../lib/highlightFilter';
 import { deleteHighlight, listHighlights, updateHighlight } from '../lib/api';
 import { useAction } from '../lib/context';
 import { ColorDots, CommentBox } from './HighlightPopover';
@@ -10,12 +11,15 @@ import CardEditor from './CardEditor';
 export default function HighlightsView({ docs }: { docs: DocumentRow[] }) {
   const [params, setParams] = useSearchParams();
   const [all, setAll] = useState<Highlight[] | null>(null);
-  const [color, setColor] = useState<HighlightColor | ''>('');
-  const [q, setQ] = useState('');
   const [open, setOpen] = useState<string | null>(null);
   const [cardFrom, setCardFrom] = useState<Highlight | null>(null);
   const run = useAction();
-  const docId = params.get('doc') ?? '';
+  const filter = readFilter(params);
+  const { doc: docId, color, period, q } = filter;
+  const setFilter = (patch: Partial<HlFilter>) => {
+    const next = { ...filter, ...patch };
+    setParams(new URLSearchParams({ tab: 'grifos', ...Object.fromEntries(Object.entries(next).filter(([, v]) => v)) }), { replace: true });
+  };
   // objeto estável: o editor reinicia os campos quando o prefill muda
   const prefill = useMemo(() => cardFrom ? { front: cardFrom.text, sourceDocumentId: cardFrom.document_id, sourcePage: cardFrom.page } : undefined, [cardFrom]);
 
@@ -29,13 +33,8 @@ export default function HighlightsView({ docs }: { docs: DocumentRow[] }) {
   const withHl = docs.filter((d) => counts.has(d.id));
 
   const title = (id: string) => docs.find((d) => d.id === id)?.title ?? 'Arquivo';
-  const list = (all ?? []).filter((h) => (!docId || h.document_id === docId) && (!color || h.color === color)
-    && (!q || `${h.text} ${h.comment ?? ''}`.toLowerCase().includes(q.toLowerCase())))
-    .sort((a, b) => (a.document_id === b.document_id
-      ? a.page - b.page || a.created_at.localeCompare(b.created_at)
-      : title(a.document_id).localeCompare(title(b.document_id), 'pt-BR')));
-
-  const pick = (id: string) => { const p = new URLSearchParams(params); if (id) p.set('doc', id); else p.delete('doc'); setParams(p, { replace: true }); };
+  const list = filterHighlights(all ?? [], filter, title);
+  const qs = filterQuery(filter);
   const replace = (h: Highlight) => setAll((l) => (l ?? []).map((x) => (x.id === h.id ? h : x)));
 
   async function remove(h: Highlight) {
@@ -55,18 +54,29 @@ export default function HighlightsView({ docs }: { docs: DocumentRow[] }) {
   return (
     <div className="hl-view">
       <div className="filters">
-        <select value={docId} onChange={(e) => pick(e.target.value)}>
+        <select value={docId} onChange={(e) => setFilter({ doc: e.target.value })}>
           <option value="">Todos os arquivos ({all.length})</option>
           {withHl.map((d) => <option key={d.id} value={d.id}>{d.title} ({counts.get(d.id)})</option>)}
         </select>
-        <input type="search" placeholder="Buscar nos grifos e comentários…" value={q} onChange={(e) => setQ(e.target.value)} />
+        <input type="search" placeholder="Buscar nos grifos e comentários…" value={q} onChange={(e) => setFilter({ q: e.target.value })} />
+        <select value={period} onChange={(e) => setFilter({ period: e.target.value as HlFilter['period'] })} aria-label="Quando foi grifado">
+          {PERIODS.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
+        </select>
         <div className="chips">
-          <button className={`chip${color === '' ? ' on' : ''}`} onClick={() => setColor('')}>Todas as cores</button>
+          <button className={`chip${color === '' ? ' on' : ''}`} onClick={() => setFilter({ color: '' })}>Todas as cores</button>
           {HIGHLIGHT_COLORS.map((c) => (
-            <button key={c.value} className={`chip${color === c.value ? ' on' : ''}`} onClick={() => setColor(color === c.value ? '' : c.value)}>
+            <button key={c.value} className={`chip${color === c.value ? ' on' : ''}`} onClick={() => setFilter({ color: color === c.value ? '' : c.value })}>
               <span className={`dot-mini dot-${c.value}`} /> {c.label}
             </button>
           ))}
+        </div>
+      </div>
+
+      <div className="hl-actions">
+        <span className="muted small">{list.length} grifo{list.length === 1 ? '' : 's'}{list.length !== all.length ? ' com esses filtros' : ''}</span>
+        <div className="row gap-s wrap">
+          <Link className={`btn small${list.length ? '' : ' disabled'}`} to={`/grifos/exportar${qs}`} aria-disabled={!list.length}>⤓ Exportar</Link>
+          <Link className={`btn small primary${list.length ? '' : ' disabled'}`} to={`/grifos/revisar${qs}`} aria-disabled={!list.length}>▶ Revisar grifos</Link>
         </div>
       </div>
 
