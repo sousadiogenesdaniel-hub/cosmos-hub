@@ -1,6 +1,7 @@
 import { memo, useEffect, useMemo, useRef, useState, type PointerEvent as RPointerEvent } from 'react';
-import * as pdfjs from 'pdfjs-dist';
-import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
+import * as pdfjs from 'pdfjs-dist/legacy/build/pdf.mjs';
+// versão legacy: inclui substitutos para recursos novos (ex.: toHex) e roda em navegadores mais antigos
+import workerUrl from 'pdfjs-dist/legacy/build/pdf.worker.min.mjs?url';
 import type { PDFDocumentProxy } from 'pdfjs-dist';
 import type { Highlight } from '../lib/types';
 import { hitRect } from '../lib/highlights';
