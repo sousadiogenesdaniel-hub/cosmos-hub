@@ -70,5 +70,5 @@ export function useStudySession(deckId: string, mode: 'normal' | 'audio') {
 
   const replaceNote = useCallback((n: Note) => setNotes((m) => new Map(m).set(n.id, n)), []);
 
-  return { queue, current, note: current ? notes.get(current.note_id) ?? null : null, rate, skip, dismiss, stats, replaceNote };
+  return { queue, notes, current, note: current ? notes.get(current.note_id) ?? null : null, rate, skip, dismiss, stats, replaceNote };
 }

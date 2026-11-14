@@ -553,3 +553,4 @@ td .lido-badge.static { margin: 0 0 0 8px; }
   .export-doc { box-shadow: none; padding: 0; max-width: none; border-radius: 0; }
   .export-quote, .export-comment { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
 }
+.notice { margin: 0; padding: 8px 12px; border-radius: 10px; background: color-mix(in srgb, var(--hard) 14%, transparent); border: 1px solid color-mix(in srgb, var(--hard) 40%, transparent); color: var(--text); }
