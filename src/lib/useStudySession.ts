@@ -45,7 +45,9 @@ export function useStudySession(deckId: string, mode: 'normal' | 'audio') {
     const updated: CardRow = { ...card, ...next };
     setQueue((q) => {
       if (!q) return q;
-      const rest = q.slice(1);
+      // tira ESTE card da fila (no modo áudio a ordem pode já ter andado)
+      const at = q.findIndex((c) => c.id === card.id);
+      const rest = at === -1 ? [...q] : [...q.slice(0, at), ...q.slice(at + 1)];
       // card ainda em aprendizado e vencendo logo volta para a fila
       if (new Date(updated.due).getTime() <= Date.now() + LEARN_AHEAD_MS) {
         const idx = rest.findIndex((c) => c.state !== 1 && c.state !== 3);
@@ -66,7 +68,11 @@ export function useStudySession(deckId: string, mode: 'normal' | 'audio') {
   const skip = useCallback(() => setQueue((q) => (q && q.length > 1 ? [...q.slice(1), q[0]] : q)), []);
 
   /** Tira o card da fila desta sessão sem avaliar (modo "só ouvir"). */
-  const dismiss = useCallback(() => setQueue((q) => (q ? q.slice(1) : q)), []);
+  const dismiss = useCallback((cardId?: string) => setQueue((q) => {
+    if (!q) return q;
+    const at = cardId ? q.findIndex((c) => c.id === cardId) : 0;
+    return at === -1 ? q : [...q.slice(0, at), ...q.slice(at + 1)];
+  }), []);
 
   const replaceNote = useCallback((n: Note) => setNotes((m) => new Map(m).set(n.id, n)), []);
 
