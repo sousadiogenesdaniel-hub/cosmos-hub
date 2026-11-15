@@ -32,7 +32,8 @@ export function mergeRects(rects: HlRect[]): HlRect[] {
   for (const r of sorted) {
     const last = out[out.length - 1];
     const sameLine = last && last.p === r.p && Math.abs(last.y + last.h / 2 - (r.y + r.h / 2)) < Math.min(last.h, r.h) * 0.5;
-    if (sameLine && r.x <= last.x + last.w + 0.01) {
+    // na mesma linha, une pedaços separados por até ~1 espaço entre palavras
+    if (sameLine && r.x <= last.x + last.w + Math.max(0.012, Math.min(last.h, r.h) * 1.3)) {
       const x = Math.min(last.x, r.x);
       const right = Math.max(last.x + last.w, r.x + r.w);
       const y = Math.min(last.y, r.y);
@@ -129,4 +130,89 @@ export function clearDocxHighlights() {
 export function rangeHit(r: Range, x: number, y: number): boolean {
   for (const cr of r.getClientRects()) if (x >= cr.left && x <= cr.right && y >= cr.top - 2 && y <= cr.bottom + 2) return true;
   return false;
+}
+
+// ------------------------------------------------- Marca-texto por toque
+
+/** Posição do texto sob o dedo/cursor (Chrome/Safari e Firefox). */
+export function caretAt(x: number, y: number): { node: Node; offset: number } | null {
+  const d = document as Document & {
+    caretRangeFromPoint?: (x: number, y: number) => Range | null;
+    caretPositionFromPoint?: (x: number, y: number) => { offsetNode: Node; offset: number } | null;
+  };
+  if (d.caretPositionFromPoint) {
+    const p = d.caretPositionFromPoint(x, y);
+    if (p && p.offsetNode.nodeType === Node.TEXT_NODE) return { node: p.offsetNode, offset: p.offset };
+  }
+  if (d.caretRangeFromPoint) {
+    const r = d.caretRangeFromPoint(x, y);
+    if (r && r.startContainer.nodeType === Node.TEXT_NODE) return { node: r.startContainer, offset: r.startOffset };
+  }
+  return null;
+}
+
+const WORD = /[\p{L}\p{N}_'’\-–.,;:%°²³⁰¹⁴-⁹ₐ-ₜ()/=+−×]/u;
+
+/** A palavra inteira em volta de um ponto do texto. */
+export function wordRangeAt(node: Node, offset: number): Range | null {
+  const text = (node as Text).data ?? '';
+  if (!text.length) return null;
+  let a = Math.min(offset, text.length - 1);
+  // tocou num espaço: pega a palavra à direita (ou à esquerda)
+  if (!WORD.test(text[a] ?? '')) {
+    if (WORD.test(text[a + 1] ?? '')) a = a + 1;
+    else if (a > 0 && WORD.test(text[a - 1] ?? '')) a = a - 1;
+    else return null;
+  }
+  let s = a, e = a + 1;
+  while (s > 0 && WORD.test(text[s - 1])) s--;
+  while (e < text.length && WORD.test(text[e])) e++;
+  // não leva pontuação solta das pontas
+  while (e > s + 1 && /[.,;:)]/.test(text[e - 1])) e--;
+  while (s < e - 1 && /[(]/.test(text[s])) s++;
+  const r = document.createRange();
+  r.setStart(node, s);
+  r.setEnd(node, e);
+  return r;
+}
+
+/** Junta duas palavras tocadas (em qualquer ordem) num trecho só. */
+export function spanRange(a: Range, b: Range): Range {
+  const [first, second] = a.compareBoundaryPoints(Range.START_TO_START, b) <= 0 ? [a, b] : [b, a];
+  const r = document.createRange();
+  r.setStart(first.startContainer, first.startOffset);
+  r.setEnd(second.endContainer, second.endOffset);
+  return r;
+}
+
+/**
+ * Texto de um trecho, com quebras de linha nos <br> e entre parágrafos
+ * (lido direto do documento: funciona mesmo com a seleção desligada).
+ */
+export function rangeText(r: Range): string {
+  const rootNode = r.commonAncestorContainer.nodeType === Node.TEXT_NODE ? r.commonAncestorContainer.parentNode! : r.commonAncestorContainer;
+  const walker = document.createTreeWalker(rootNode, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT);
+  let out = '';
+  for (let n: Node | null = walker.currentNode; n; n = walker.nextNode()) {
+    if (!r.intersectsNode(n)) continue;
+    if (n.nodeType === Node.TEXT_NODE) {
+      const t = (n as Text).data;
+      const a = n === r.startContainer ? r.startOffset : 0;
+      const b = n === r.endContainer ? r.endOffset : t.length;
+      out += t.slice(a, b);
+    } else {
+      const tag = (n as Element).tagName;
+      if (tag === 'BR') out += '\n';
+      else if (/^(P|H[1-6]|LI|DIV|SECTION|TR)$/.test(tag) && n !== rootNode && out && !out.endsWith('\n')) out += '\n\n';
+    }
+  }
+  return out;
+}
+
+const PENDING = 'hl-pending';
+export function showPending(r: Range | null) {
+  const api = (globalThis as unknown as { CSS?: { highlights?: Map<string, unknown> } }).CSS?.highlights;
+  const H = (globalThis as unknown as { Highlight?: new (...r: Range[]) => unknown }).Highlight;
+  if (!api || !H) return;
+  if (r) api.set(PENDING, new H(r)); else api.delete(PENDING);
 }

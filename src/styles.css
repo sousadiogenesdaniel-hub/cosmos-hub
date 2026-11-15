@@ -234,7 +234,8 @@ label.check { flex-direction: row; align-items: center; gap: 8px; }
 .viewer { flex: 1; min-width: 0; position: relative; display: flex; }
 .viewer-scroll { flex: 1; overflow: auto; }
 .pdf-pages { display: flex; flex-direction: column; align-items: center; gap: 16px; padding: 16px; width: max-content; min-width: 100%; }
-.pdf-page { position: relative; background: #fff; box-shadow: 0 2px 12px rgb(0 0 0 / 0.3); flex: none; }
+.pdf-clip { flex: none; overflow: hidden; overflow-x: clip; overflow-y: visible; background: #fff; box-shadow: 0 2px 12px rgb(0 0 0 / 0.3); }
+.pdf-page { position: relative; background: #fff; }
 .pdf-page canvas { display: block; }
 .page-num { position: absolute; bottom: -14px; right: 0; font-size: 0.7rem; color: var(--muted); transform: translateY(100%); }
 .crop-mode .textLayer { pointer-events: none; }
@@ -554,3 +555,38 @@ td .lido-badge.static { margin: 0 0 0 8px; }
   .export-quote, .export-comment { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
 }
 .notice { margin: 0; padding: 8px 12px; border-radius: 10px; background: color-mix(in srgb, var(--hard) 14%, transparent); border: 1px solid color-mix(in srgb, var(--hard) 40%, transparent); color: var(--text); }
+
+/* ---------------------------- Modo leitura --------------------------- */
+.reflow-scroll { overflow-anchor: auto; }
+.reflow { max-width: 42em; margin: 0 auto; padding: 8px 22px 120px; font-family: var(--font-card); line-height: 1.7; color: var(--text); }
+.reflow-page { overflow-anchor: auto; }
+.reflow-page.loading { min-height: 120vh; }
+.reflow-pagebar { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 18px 0 8px; padding-top: 8px; border-top: 1px dashed var(--border); font-family: var(--font); font-size: 0.75rem; color: var(--muted); }
+.reflow-page:first-child .reflow-pagebar { border-top: 0; margin-top: 4px; }
+.reflow p { margin: 0 0 0.85em; hyphens: auto; -webkit-hyphens: auto; overflow-wrap: break-word; }
+.reflow h3 { font-family: var(--font); font-size: 1.05em; font-weight: 700; margin: 1.2em 0 0.5em; line-height: 1.35; }
+.reflow-image { margin: 6px 0 14px; background: #fff; border-radius: 6px; overflow: hidden; }
+.reflow-image canvas { display: block; width: 100%; height: auto; }
+.reflow-note { font-family: var(--font); margin: 0 0 12px; }
+.hl-mark { color: inherit; border-radius: 0; padding: 0.06em 0; cursor: pointer; }
+mark.hl-yellow { background: var(--hl-yellow); }
+mark.hl-green { background: var(--hl-green); }
+mark.hl-blue { background: var(--hl-blue); }
+mark.hl-pink { background: var(--hl-pink); }
+::highlight(hl-pending) { background-color: rgb(139 124 255 / 0.55); }
+
+/* -------------------------- Marca-texto por toque --------------------- */
+.marker-bar { flex-basis: 100%; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 6px 4px 2px; border-top: 1px solid var(--border); }
+.marker-bar .small { flex: 1; min-width: 160px; }
+.reader.marking .viewer { cursor: crosshair; }
+.reader.marking .viewer, .reader.marking .viewer * { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+.reader.marking .textLayer :is(span, br) { cursor: crosshair; }
+.menu .menu-item { display: block; font: inherit; color: var(--text); padding: 8px 10px; border-radius: 7px; text-decoration: none; }
+.menu .menu-item:hover { background: var(--surface-3); text-decoration: none; }
+.reader-tools .menu { min-width: 250px; }
+
+@media (max-width: 760px) {
+  .reader-tools { gap: 5px; }
+  .reader-tools .btn.small { padding: 5px 8px; }
+  .page-jump input { width: 44px; padding: 5px 4px; }
+}

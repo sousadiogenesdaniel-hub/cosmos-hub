@@ -1,23 +1,18 @@
 import { memo, useEffect, useMemo, useRef, useState, type PointerEvent as RPointerEvent } from 'react';
-import * as pdfjs from 'pdfjs-dist/legacy/build/pdf.mjs';
-// versão legacy: inclui substitutos para recursos novos (ex.: toHex) e roda em navegadores mais antigos
-import workerUrl from 'pdfjs-dist/legacy/build/pdf.worker.min.mjs?url';
-import type { PDFDocumentProxy } from 'pdfjs-dist';
+import { pdfjs, type PDFDocumentProxy } from '../lib/pdf';
 import type { Highlight } from '../lib/types';
 import { hitRect } from '../lib/highlights';
 
-pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
-
 interface Props {
-  data: ArrayBuffer;
+  pdf: PDFDocumentProxy;
+  /** corta as margens brancas (faixa horizontal do texto, 0–1) */
+  crop: { x0: number; x1: number } | null;
   initialPage: number;
   zoom: number; // multiplicador sobre "caber na largura"
   cropMode: boolean;
   goto: { page: number; nonce: number } | null;
   onPageChange: (page: number) => void;
-  onPageCount: (n: number) => void;
   onCrop: (blob: Blob, page: number) => void;
-  onError: (msg: string) => void;
   highlights: Highlight[];
   focusId: string | null;
   onHighlightClick: (h: Highlight, x: number, y: number) => void;
@@ -25,39 +20,34 @@ interface Props {
 
 const NO_HL: Highlight[] = [];
 
-export default function PdfViewer({ data, initialPage, zoom, cropMode, goto, onPageChange, onPageCount, onCrop, onError, highlights, focusId, onHighlightClick }: Props) {
+export default function PdfViewer({ pdf, crop, initialPage, zoom, cropMode, goto, onPageChange, onCrop, highlights, focusId, onHighlightClick }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null);
-  const [pdf, setPdf] = useState<PDFDocumentProxy | null>(null);
   const [base, setBase] = useState<{ w: number; h: number } | null>(null);
   const [fitScale, setFitScale] = useState(1);
   const scrolledInitially = useRef(false);
   const lastReported = useRef(0);
 
   useEffect(() => {
-    let destroyed = false;
-    const task = pdfjs.getDocument({ data: data.slice(0) });
-    task.promise.then(async (doc) => {
-      if (destroyed) return;
-      const p1 = await doc.getPage(1);
+    let alive = true;
+    pdf.getPage(1).then((p1) => {
       const vp = p1.getViewport({ scale: 1 });
-      setBase({ w: vp.width, h: vp.height });
-      setPdf(doc);
-      onPageCount(doc.numPages);
-    }).catch((e) => onError(`Não consegui abrir o PDF: ${e.message ?? e}`));
-    return () => { destroyed = true; task.destroy(); };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data]);
+      if (alive) setBase({ w: vp.width, h: vp.height });
+    });
+    return () => { alive = false; };
+  }, [pdf]);
+
+  const cropW = crop ? crop.x1 - crop.x0 : 1;
 
   // escala "caber na largura"
   useEffect(() => {
     const el = scrollRef.current;
     if (!el || !base) return;
-    const update = () => setFitScale(Math.min(1.5, Math.max(0.3, (el.clientWidth - 32) / base.w)));
+    const update = () => setFitScale(Math.min(crop ? 2 : 1.5, Math.max(0.3, (el.clientWidth - 32) / (base.w * cropW))));
     update();
     const ro = new ResizeObserver(update);
     ro.observe(el);
     return () => ro.disconnect();
-  }, [base]);
+  }, [base, cropW, crop]);
 
   const scale = fitScale * zoom;
 
@@ -111,7 +101,7 @@ export default function PdfViewer({ data, initialPage, zoom, cropMode, goto, onP
     <div ref={scrollRef} className={`viewer-scroll${cropMode ? ' crop-mode' : ''}`} onScroll={onScroll}>
       <div className="pdf-pages">
         {Array.from({ length: pdf.numPages }, (_, i) => (
-          <PdfPage key={i + 1} pdf={pdf} num={i + 1} scale={scale} baseW={base.w} baseH={base.h} root={scrollRef} cropMode={cropMode} onCrop={onCrop}
+          <PdfPage key={i + 1} pdf={pdf} num={i + 1} scale={scale} crop={crop} baseW={base.w} baseH={base.h} root={scrollRef} cropMode={cropMode} onCrop={onCrop}
             hls={byPage.get(i + 1) ?? NO_HL} focusId={focusId} onHighlightClick={onHighlightClick} />
         ))}
       </div>
@@ -127,13 +117,14 @@ interface PageProps {
   baseH: number;
   root: React.RefObject<HTMLDivElement | null>;
   cropMode: boolean;
+  crop: { x0: number; x1: number } | null;
   onCrop: (blob: Blob, page: number) => void;
   hls: Highlight[];
   focusId: string | null;
   onHighlightClick: (h: Highlight, x: number, y: number) => void;
 }
 
-const PdfPage = memo(function PdfPage({ pdf, num, scale, baseW, baseH, root, cropMode, onCrop, hls, focusId, onHighlightClick }: PageProps) {
+const PdfPage = memo(function PdfPage({ pdf, num, scale, baseW, baseH, root, cropMode, crop, onCrop, hls, focusId, onHighlightClick }: PageProps) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const textRef = useRef<HTMLDivElement>(null);
@@ -225,8 +216,9 @@ const PdfPage = memo(function PdfPage({ pdf, num, scale, baseW, baseH, root, cro
   }
 
   return (
+    <div className="pdf-clip" style={{ width: crop ? w * (crop.x1 - crop.x0) : w, height: h }}>
     <div ref={wrapRef} className={`pdf-page${hls.length ? ' has-hl' : ''}`} data-page={num} onClick={onClick}
-      style={{ width: w, height: h, ['--scale-factor' as string]: scale, ['--total-scale-factor' as string]: scale }}>
+      style={{ width: w, height: h, marginLeft: crop ? -crop.x0 * w : 0, ['--scale-factor' as string]: scale, ['--total-scale-factor' as string]: scale }}>
       <canvas ref={canvasRef} style={{ width: w, height: h }} />
       {hls.length > 0 && (
         <div className="hl-layer" aria-hidden>
@@ -251,6 +243,7 @@ const PdfPage = memo(function PdfPage({ pdf, num, scale, baseW, baseH, root, cro
         </div>
       )}
       <span className="page-num">{num}</span>
+    </div>
     </div>
   );
 });
