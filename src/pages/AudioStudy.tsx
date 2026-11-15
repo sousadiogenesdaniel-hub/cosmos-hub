@@ -1,14 +1,16 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import type { Grade } from 'ts-fsrs';
-import { deckPath, signedUrl } from '../lib/api';
+import type { CardRow, Note } from '../lib/types';
+import { deckPath } from '../lib/api';
 import { cardFaces } from '../lib/cards';
 import { RATINGS, previewIntervals } from '../lib/srs';
 import { fmtInterval } from '../lib/dates';
 import { useApp } from '../lib/context';
 import { useStudySession } from '../lib/useStudySession';
 import { Finished } from './Study';
-import { KeepAlive, ttsBudgetMs } from '../lib/backgroundAudio';
+import { KeepAlive } from '../lib/backgroundAudio';
+import { AudioTimeline, ttsSeconds } from '../lib/audioTimeline';
 
 type Phase = 'question' | 'thinking' | 'answer' | 'rating';
 type After = 'wait' | 'auto' | 'listen';
@@ -33,178 +35,246 @@ const PHASE_LABEL: Record<Phase, string> = {
   rating: 'Como foi?',
 };
 
+/** Quanto áudio deixar agendado à frente (toca mesmo se o app ficar parado). */
+const LOOKAHEAD_S = 90;
+
+/** Um card já agendado na linha do tempo do áudio. */
+interface Item {
+  key: string;
+  card: CardRow;
+  note: Note;
+  qStart: number; qEnd: number; aStart: number; aEnd: number; end: number;
+  sources: AudioBufferSourceNode[];
+  tts: { q: string | null; a: string | null };
+  spoken: { q: boolean; a: boolean };
+  paths: (string | null)[];
+}
+
+const cardKey = (c: CardRow) => `${c.id}:${c.reps}:${c.due}`;
+
 export default function AudioStudy() {
   const { deckId = '' } = useParams();
   const { decks, profile } = useApp();
   const { queue, notes, current, note, rate, dismiss, stats } = useStudySession(deckId, 'audio');
   const [running, setRunning] = useState(false);
-  const [phase, setPhase] = useState<Phase>('question');
-  const [countdown, setCountdown] = useState(0);
-  const [replay, setReplay] = useState(0);
+  const [paused, setPaused] = useState(false);
+  const [view, setView] = useState<{ phase: Phase; countdown: number; key: string | null }>({ phase: 'question', countdown: 0, key: null });
   const [think, setThink] = useState(profile?.audio_think_seconds ?? 15);
   const [prefs, setPrefs] = useState(loadPrefs);
   const [showText, setShowText] = useState(false);
 
-  const token = useRef(0);
-  const audio = useRef<HTMLAudioElement | null>(null);
-  const pendingResolve = useRef<(() => void) | null>(null);
-  const cardStart = useRef(Date.now());
+  const tl = useRef<AudioTimeline | null>(null);
+  const keep = useRef<KeepAlive | null>(null);
+  const plan = useRef<Item[]>([]);
+  const building = useRef(false);
+  const epoch = useRef(0);
+  const finalized = useRef(new Set<string>());
+  const skipQuestion = useRef(false);
+  const queueRef = useRef(queue); queueRef.current = queue;
+  const notesRef = useRef(notes); notesRef.current = notes;
   const thinkRef = useRef(think); thinkRef.current = think;
   const prefsRef = useRef(prefs); prefsRef.current = prefs;
-  const busy = useRef(false);
-  const skipThink = useRef(false);
-  const keep = useRef<KeepAlive | null>(null);
-  const keepAlive = () => (keep.current ??= new KeepAlive());
-
-  /** Começar/retomar: precisa vir de um toque, para o navegador deixar tocar em segundo plano. */
-  function start() {
-    keepAlive().start();
-    setRunning(true);
-  }
-  function pause() {
-    keep.current?.pause();
-    setRunning(false);
-  }
 
   useEffect(() => { if (profile) setThink(profile.audio_think_seconds); }, [profile]);
   useEffect(() => { try { localStorage.setItem(PREF, JSON.stringify(prefs)); } catch { /* ignore */ } }, [prefs]);
 
-  function stopAll() {
-    audio.current?.pause();
-    if (typeof speechSynthesis !== 'undefined') speechSynthesis.cancel();
-    pendingResolve.current?.();
-    pendingResolve.current = null;
+  function speak(text: string) {
+    if (typeof speechSynthesis === 'undefined') return;
+    const u = new SpeechSynthesisUtterance(text);
+    u.lang = 'pt-BR';
+    speechSynthesis.cancel();
+    speechSynthesis.speak(u);
   }
 
-  async function play(path: string | null, text: string, alive: () => boolean) {
-    if (path) {
-      try {
-        const url = await signedUrl(path);
-        if (!alive()) return;
-        const el = audio.current ?? (audio.current = new Audio());
-        el.src = url;
-        await new Promise<void>((res) => {
-          pendingResolve.current = res;
-          el.onended = () => res();
-          el.onerror = () => res();
-          el.play().catch(() => res());
-        });
-        return;
-      } catch { /* cai para a voz sintetizada */ }
-    }
-    if (!prefsRef.current.tts || !text || typeof speechSynthesis === 'undefined') { await wait(1500, alive); return; }
-    await new Promise<void>((resolve) => {
-      let settled = false;
-      const timers: number[] = [];
-      const res = () => { if (settled) return; settled = true; timers.forEach((t) => window.clearTimeout(t)); resolve(); };
-      pendingResolve.current = res;
-      const u = new SpeechSynthesisUtterance(text);
-      u.lang = 'pt-BR';
-      u.rate = 1;
-      u.onend = () => res();
-      u.onerror = () => res();
-      let started = false;
-      u.onstart = () => { started = true; };
-      speechSynthesis.cancel();
-      speechSynthesis.speak(u);
-      // a voz do sistema pode não responder com a tela bloqueada: nunca deixa a sessão travar
-      timers.push(window.setTimeout(() => { if (!started) { speechSynthesis.cancel(); res(); } }, 4000));
-      timers.push(window.setTimeout(() => { speechSynthesis.cancel(); res(); }, ttsBudgetMs(text)));
-    });
+  /** Monta e agenda um card a partir do instante `start`. */
+  async function buildItem(card: CardRow, n: Note, start: number, skipQ: boolean): Promise<Item | null> {
+    const t = tl.current!;
+    const f = cardFaces(n, card.ord);
+    const [qBuf, aBuf] = await Promise.all([
+      !skipQ && f.questionAudio ? t.load(f.questionAudio) : Promise.resolve(null),
+      f.answerAudio ? t.load(f.answerAudio) : Promise.resolve(null),
+    ]);
+    const tts = prefsRef.current.tts;
+    const qTts = !skipQ && !qBuf && tts && f.questionText ? f.questionText : null;
+    const aTts = !aBuf && tts && f.answerText ? f.answerText : null;
+    const qDur = skipQ ? 0 : qBuf ? qBuf.duration : qTts ? ttsSeconds(qTts) : 1;
+    const aDur = aBuf ? aBuf.duration : aTts ? ttsSeconds(aTts) : 1;
+    const qStart = Math.max(start, t.now + 0.15);
+    const qEnd = qStart + qDur;
+    const aStart = qEnd + (skipQ ? 0.2 : thinkRef.current);
+    const aEnd = aStart + aDur;
+    const end = aEnd + (prefsRef.current.after === 'wait' ? 0 : Math.max(1, prefsRef.current.gap));
+    const sources: AudioBufferSourceNode[] = [];
+    if (qBuf) sources.push(t.schedule(qBuf, qStart));
+    if (aBuf) sources.push(t.schedule(aBuf, aStart));
+    return {
+      key: cardKey(card), card, note: n, qStart, qEnd, aStart, aEnd, end, sources,
+      tts: { q: qTts, a: aTts }, spoken: { q: false, a: false }, paths: [f.questionAudio, f.answerAudio],
+    };
   }
 
-  async function wait(ms: number, alive: () => boolean) {
-    const end = Date.now() + ms;
-    while (Date.now() < end && alive()) await new Promise((r) => setTimeout(r, 200));
-  }
-
-  async function doRate(grade: Grade) {
-    if (!current || busy.current) return;
-    busy.current = true;
-    token.current++;
-    stopAll();
-    await rate(current, grade, Date.now() - cardStart.current);
-    busy.current = false;
-  }
-
-  // sequência: pergunta → pausa para pensar → resposta → avaliação
-  useEffect(() => {
-    if (!running || !current || !note) return;
-    const my = ++token.current;
-    const alive = () => token.current === my;
-    cardStart.current = Date.now();
-    skipThink.current = false;
-    (async () => {
-      const f = cardFaces(note, current.ord);
-      setPhase('question');
-      await play(f.questionAudio, f.questionText, alive);
-      if (!alive()) return;
-      setPhase('thinking');
-      for (let s = thinkRef.current; s > 0 && !skipThink.current; s--) {
-        setCountdown(s);
-        await wait(1000, () => alive() && !skipThink.current);
-        if (!alive()) return;
+  /** Mantém a fila de áudio agendada à frente. */
+  async function extend() {
+    const t = tl.current;
+    if (!t || building.current || t.paused) return;
+    building.current = true;
+    const my = epoch.current;
+    try {
+      for (;;) {
+        const items = plan.current;
+        if (prefsRef.current.after === 'wait' && items.length >= 1) break;
+        const lastEnd = items.length ? items[items.length - 1].end : t.now;
+        if (items.length && lastEnd - t.now > LOOKAHEAD_S) break;
+        const planned = new Set(items.map((i) => i.card.id));
+        const next = (queueRef.current ?? []).find((c) => !planned.has(c.id) && !finalized.current.has(cardKey(c)));
+        const n = next && notesRef.current.get(next.note_id);
+        if (!next || !n) break;
+        const skipQ = items.length === 0 && skipQuestion.current;
+        skipQuestion.current = false;
+        const item = await buildItem(next, n, lastEnd, skipQ);
+        if (my !== epoch.current || !item) { if (item) t.cancel(item.sources); break; }
+        plan.current = [...plan.current, item];
       }
-      setPhase('answer');
-      await play(f.answerAudio, f.answerText, alive);
-      if (!alive()) return;
-      setPhase('rating');
-      const after = prefsRef.current.after;
-      if (after === 'wait') return;
-      for (let s = Math.max(1, prefsRef.current.gap); s > 0; s--) { setCountdown(s); await wait(1000, alive); if (!alive()) return; }
-      if (after === 'auto') doRate(3 as Grade);
-      else dismiss();
-    })();
-    return () => { token.current++; stopAll(); };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [running, current?.id, current?.reps, note?.id, replay]);
+    } finally {
+      building.current = false;
+    }
+  }
 
-  // tela ligada durante a sessão
+  /** Recomeça o agendamento a partir do card atual (após avaliar, pular, repetir…). */
+  function reset() {
+    epoch.current++;
+    tl.current?.cancel();
+    if (typeof speechSynthesis !== 'undefined') speechSynthesis.cancel();
+    plan.current = [];
+  }
+
+  function finalize(item: Item, grade: Grade | null) {
+    finalized.current.add(item.key);
+    tl.current?.forget(item.paths);
+    const ms = Math.max(0, ((tl.current?.now ?? item.end) - item.qStart) * 1000);
+    if (grade === null) dismiss();
+    else rate(item.card, grade, Math.min(ms, (item.end - item.qStart) * 1000 + 60000));
+  }
+
+  /** O "relógio" da tela. Se o celular congelar o app, o áudio segue e isto só atualiza ao voltar. */
+  const tick = useCallback(() => {
+    const t = tl.current;
+    if (!t) return;
+    const now = t.now;
+    const after = prefsRef.current.after;
+    // cards que já terminaram de tocar: conta a revisão (ou pula, no Só ouvir)
+    if (after !== 'wait') {
+      while (plan.current[0] && now >= plan.current[0].end) {
+        const item = plan.current[0];
+        plan.current = plan.current.slice(1);
+        finalize(item, after === 'auto' ? (3 as Grade) : null);
+      }
+    }
+    // voz sintetizada para cards sem áudio gravado (só funciona com o app ativo)
+    for (const it of plan.current) {
+      if (it.tts.q && !it.spoken.q && now >= it.qStart - 0.05) { it.spoken.q = true; if (now < it.qEnd) speak(it.tts.q); }
+      if (it.tts.a && !it.spoken.a && now >= it.aStart - 0.05) { it.spoken.a = true; if (now < it.aEnd) speak(it.tts.a); }
+    }
+    const head = plan.current[0];
+    if (head) {
+      let phase: Phase, countdown = 0;
+      if (now < head.qEnd) phase = 'question';
+      else if (now < head.aStart) { phase = 'thinking'; countdown = Math.ceil(head.aStart - now); }
+      else if (now < head.aEnd) phase = 'answer';
+      else { phase = 'rating'; countdown = Math.max(1, Math.ceil(head.end - now)); }
+      setView((v) => (v.phase === phase && v.countdown === countdown && v.key === head.key ? v : { phase, countdown, key: head.key }));
+    }
+    extend();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   useEffect(() => {
-    if (!running || !('wakeLock' in navigator)) return;
-    let lock: { release: () => Promise<void> } | null = null;
-    navigator.wakeLock.request('screen').then((l) => { lock = l; }).catch(() => {});
-    return () => { lock?.release().catch(() => {}); };
-  }, [running]);
+    if (!running) return;
+    const id = window.setInterval(tick, 250);
+    const onVis = () => { if (document.visibilityState === 'visible') tick(); };
+    document.addEventListener('visibilitychange', onVis);
+    tick();
+    return () => { window.clearInterval(id); document.removeEventListener('visibilitychange', onVis); };
+  }, [running, tick]);
 
-  // botões do fone (avançar = Bom, voltar = Errei, play/pause)
+  // ---------- ações
+  function start() {
+    if (!tl.current) tl.current = new AudioTimeline();
+    else tl.current.resume();
+    (keep.current ??= new KeepAlive()).start();
+    setPaused(false);
+    setRunning(true);
+  }
+
+  function pause() {
+    tl.current?.pause();
+    keep.current?.pause();
+    if (typeof speechSynthesis !== 'undefined') speechSynthesis.cancel();
+    setPaused(true);
+  }
+
+  function resume() {
+    tl.current?.resume();
+    keep.current?.start();
+    setPaused(false);
+  }
+
+  function doRate(grade: Grade) {
+    const head = plan.current[0];
+    if (!head) return;
+    reset();
+    finalize(head, grade);
+    tick();
+  }
+
+  function skip() {
+    const head = plan.current[0];
+    if (!head) return;
+    reset();
+    finalize(head, null);
+    tick();
+  }
+
+  function replay() { reset(); tick(); }
+  function answerNow() { skipQuestion.current = true; reset(); tick(); }
+
+  // controles na tela de bloqueio / fone
   useEffect(() => {
     if (!('mediaSession' in navigator)) return;
     const ms = navigator.mediaSession;
-    const q = current && note ? cardFaces(note, current.ord).questionText : '';
+    const head = plan.current[0];
+    const q = head ? cardFaces(head.note, head.card.ord).questionText : '';
     ms.metadata = new MediaMetadata({
-      title: running ? `Card ${stats.done + 1} · ${PHASE_LABEL[phase].replace('…', '')}` : 'Revisão por áudio',
+      title: running ? `Card ${stats.done + 1} · ${paused ? 'Pausado' : PHASE_LABEL[view.phase].replace('…', '')}` : 'Revisão por áudio',
       artist: deckPath(deckId, decks),
       album: q ? (q.length > 70 ? q.slice(0, 70) + '…' : q) : 'Cosmos Hub',
-      artwork: [{ src: `${import.meta.env.BASE_URL}favicon.svg`, sizes: 'any', type: 'image/svg+xml' }],
+      artwork: [{ src: `${import.meta.env.BASE_URL}icon-512.png`, sizes: '512x512', type: 'image/png' }],
     });
-    try { ms.playbackState = running ? 'playing' : 'paused'; } catch { /* ignore */ }
+    try { ms.playbackState = running && !paused ? 'playing' : 'paused'; } catch { /* ignore */ }
     const set = (a: MediaSessionAction, h: (() => void) | null) => { try { ms.setActionHandler(a, h); } catch { /* sem suporte */ } };
-    if (prefs.after === 'listen') {
-      set('nexttrack', () => { token.current++; stopAll(); dismiss(); });
-      set('previoustrack', () => setReplay((r) => r + 1));
-    } else {
-      set('nexttrack', () => doRate(3 as Grade));
-      set('previoustrack', () => doRate(1 as Grade));
-    }
-    set('play', () => start());
-    set('pause', () => pause());
+    if (prefs.after === 'listen') { set('nexttrack', skip); set('previoustrack', replay); }
+    else { set('nexttrack', () => doRate(3 as Grade)); set('previoustrack', () => doRate(1 as Grade)); }
+    set('play', () => (running ? resume() : start()));
+    set('pause', pause);
     return () => { (['nexttrack', 'previoustrack', 'play', 'pause'] as MediaSessionAction[]).forEach((a) => set(a, null)); };
   });
 
-  useEffect(() => () => { token.current++; stopAll(); keep.current?.destroy(); }, []);
+  useEffect(() => () => { reset(); tl.current?.close(); keep.current?.destroy(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // fila acabou: para a faixa de fundo
-  useEffect(() => { if (queue !== null && !current) keep.current?.pause(); }, [queue, current]);
+  // fila acabou: desliga o áudio
+  const finished = queue !== null && !current;
+  useEffect(() => { if (finished) { tl.current?.pause(); keep.current?.pause(); } }, [finished]);
 
   const title = deckPath(deckId, decks);
   if (queue === null) return <div className="center-pad"><div className="spinner" /></div>;
   if (!current || !note) return <Finished title={title} stats={stats} deckId={deckId} />;
 
-  const faces = cardFaces(note, current.ord);
+  const head = plan.current[0];
+  const shownCard = head?.card ?? current;
+  const shownNote = head?.note ?? note;
+  const faces = cardFaces(shownNote, shownCard.ord);
   const now = new Date();
-  const intervals = previewIntervals(current, now);
-  const withAudio = queue.length;
+  const intervals = previewIntervals(shownCard, now);
+  const phase = view.phase;
   const missingAudio = queue.filter((c) => {
     const n = notes.get(c.note_id);
     if (!n) return false;
@@ -218,7 +288,7 @@ export default function AudioStudy() {
         <Link to="/decks" className="icon-btn" title="Sair">←</Link>
         <div className="grow">
           <div className="study-title">🎧 {title}</div>
-          <div className="small muted">{withAudio} na fila · {stats.done} revisados</div>
+          <div className="small muted">{queue.length} na fila · {stats.done} revisados</div>
         </div>
       </header>
 
@@ -245,17 +315,17 @@ export default function AudioStudy() {
               </label>
             )}
             <p className="muted small">Fone ou tela de bloqueio: ⏯ pausa · ⏭ = Bom · ⏮ = Errei (no modo Só ouvir: ⏭ pula e ⏮ repete).</p>
-            <p className="muted small">🔒 Pode bloquear a tela: o áudio continua e os controles aparecem na tela de bloqueio, como num player de música.</p>
+            <p className="muted small">🔒 Pode bloquear a tela: os áudios gravados ficam agendados e tocam na hora certa, como uma playlist.</p>
             {missingAudio > 0 && prefs.tts && (
-              <p className="notice small">{missingAudio} de {queue.length} cards não têm áudio gravado e serão lidos pela voz do celular. Em alguns Android essa voz pode falhar com a tela bloqueada. Se acontecer, o app pula para o próximo trecho e não trava. Para estudar caminhando, prefira cards com áudio gravado.</p>
+              <p className="notice small">{missingAudio} de {queue.length} cards não têm áudio gravado e serão lidos pela voz do celular. Essa voz só funciona com o app aberto na tela: com a tela bloqueada, esses trechos ficam em silêncio. Para estudar caminhando, grave os áudios dos cards.</p>
             )}
             <button className="btn primary big" onClick={start}>▶ Começar</button>
           </div>
         ) : (
           <>
-            <div className={`audio-orb ${phase}`}>
-              <span className="orb-label">{phase === 'rating' && prefs.after !== 'wait' ? 'Próximo card em' : PHASE_LABEL[phase]}</span>
-              {(phase === 'thinking' || (phase === 'rating' && prefs.after !== 'wait')) && <span className="orb-count">{countdown}</span>}
+            <div className={`audio-orb ${paused ? 'rating' : phase}`}>
+              <span className="orb-label">{paused ? 'Pausado' : phase === 'rating' && prefs.after !== 'wait' ? 'Próximo card em' : PHASE_LABEL[phase]}</span>
+              {!paused && (phase === 'thinking' || (phase === 'rating' && prefs.after !== 'wait')) && <span className="orb-count">{view.countdown}</span>}
             </div>
             <button className="btn small link" onClick={() => setShowText(!showText)}>{showText ? 'Esconder texto' : 'Mostrar texto'}</button>
             {showText && (
@@ -265,14 +335,12 @@ export default function AudioStudy() {
               </div>
             )}
             <div className="row center gap-s wrap">
-              <button className="btn ghost" onClick={pause}>❚❚ Pausar</button>
-              <button className="btn ghost" onClick={() => setReplay((r) => r + 1)}>↺ Repetir card</button>
-              {phase !== 'answer' && phase !== 'rating' && (
-                <button className="btn ghost" onClick={() => {
-                  skipThink.current = true;
-                  if (phase === 'question') stopAll();
-                }}>⏩ Resposta já</button>
-              )}
+              {paused
+                ? <button className="btn primary" onClick={resume}>▶ Continuar</button>
+                : <button className="btn ghost" onClick={pause}>❚❚ Pausar</button>}
+              <button className="btn ghost" onClick={replay} disabled={paused}>↺ Repetir card</button>
+              {(phase === 'question' || phase === 'thinking') && !paused && <button className="btn ghost" onClick={answerNow}>⏩ Resposta já</button>}
+              {prefs.after === 'listen' && !paused && <button className="btn ghost" onClick={skip}>⏭ Pular</button>}
             </div>
           </>
         )}
@@ -282,7 +350,7 @@ export default function AudioStudy() {
         <footer className="study-actions">
           <div className="ratings big-touch">
             {RATINGS.map((r) => (
-              <button key={r.grade} className={`rate ${r.cls}`} onClick={() => doRate(r.grade)}>
+              <button key={r.grade} className={`rate ${r.cls}`} onClick={() => doRate(r.grade)} disabled={paused}>
                 <span className="rate-int">{fmtInterval(now, intervals[r.grade])}</span>
                 <span>{r.label}</span>
               </button>

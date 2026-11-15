@@ -19,6 +19,9 @@ export default function Study() {
   const [revealed, setRevealed] = useState(false);
   const [showVideo, setShowVideo] = useState(false);
   const [editing, setEditing] = useState(false);
+  // tocar o áudio do card sozinho? (padrão: não; preferência deste aparelho)
+  const [autoAudio, setAutoAudio] = useState(() => { try { return localStorage.getItem('cosmos:autoAudio') === 'on'; } catch { return false; } });
+  const toggleAutoAudio = () => setAutoAudio((v) => { try { localStorage.setItem('cosmos:autoAudio', v ? 'off' : 'on'); } catch { /* ignore */ } return !v; });
   const shownAt = useRef(Date.now());
   const busy = useRef(false);
 
@@ -63,6 +66,10 @@ export default function Study() {
           <div className="study-title">{title}</div>
           <div className="small"><span className="count new">{remaining.n}</span> · <span className="count learn">{remaining.l}</span> · <span className="count review">{remaining.r}</span></div>
         </div>
+        <button className={`btn small ${autoAudio ? 'primary' : 'ghost'}`} onClick={toggleAutoAudio}
+          title={autoAudio ? 'Áudio dos cards toca sozinho (toque para desligar)' : 'Áudio dos cards só toca quando você aperta (toque para tocar sozinho)'}>
+          🔊<span className="hide-sm"> {autoAudio ? 'Auto' : 'Manual'}</span>
+        </button>
         <button className="btn small ghost" onClick={() => setEditing(true)}>✎ Editar</button>
         <button className="btn small ghost" onClick={skip} title="Ver depois">Pular</button>
       </header>
@@ -71,12 +78,12 @@ export default function Study() {
         <div className="flashcard">
           <div className="card-face" dangerouslySetInnerHTML={{ __html: faces.questionHtml }} />
           {faces.questionImage && <StoredImage src={faces.questionImage} />}
-          {faces.questionAudio && <div className="center"><AudioButton key={`q-${current.id}`} src={faces.questionAudio} label="Ouvir pergunta" autoPlay /></div>}
+          {faces.questionAudio && <div className="center"><AudioButton key={`q-${current.id}`} src={faces.questionAudio} label="Ouvir pergunta" autoPlay={autoAudio} /></div>}
           {revealed && (
             <>
               <hr className="answer-sep" />
               <div className="card-face" dangerouslySetInnerHTML={{ __html: faces.answerHtml }} />
-              {faces.answerAudio && <div className="center"><AudioButton key={`a-${current.id}`} src={faces.answerAudio} label="Ouvir resposta" autoPlay /></div>}
+              {faces.answerAudio && <div className="center"><AudioButton key={`a-${current.id}`} src={faces.answerAudio} label="Ouvir resposta" autoPlay={autoAudio} /></div>}
             </>
           )}
           <div className="card-extras">
