@@ -50,12 +50,32 @@ describe('modo leitura: montagem de parágrafos', () => {
 });
 
 describe('modo leitura: fórmulas', () => {
-  it('linha de fórmula curta não vira título', () => {
+  it('linha de fórmula curta não vira título: é marcada como fórmula', () => {
     const raw: RawItem[] = [
       { str: 'Texto do parágrafo anterior que termina aqui com ponto final e ocupa a linha.', x: 0.12, y: 0.2, w: 0.76, h: 0.016, eol: true },
       { str: 'N = ½ ρ V² S CNα', x: 0.4, y: 0.25, w: 0.2, h: 0.016, eol: true },
       { str: 'Mais texto do parágrafo seguinte, que continua normalmente nesta linha aqui.', x: 0.12, y: 0.3, w: 0.76, h: 0.016, eol: true },
     ];
-    expect(buildPage(1, raw).blocks.map((b) => b.kind)).toEqual(['p', 'p', 'p']);
+    expect(buildPage(1, raw).blocks.map((b) => b.kind)).toEqual(['p', 'f', 'p']);
+  });
+});
+
+describe('modo leitura: figuras', () => {
+  const L = (str: string, y: number, w = 0.76): RawItem => ({ str, x: 0.12, y, w, h: 0.016, eol: true });
+  it('buraco grande no texto e legenda marcam uma figura', () => {
+    const page = buildPage(1, [
+      L('Texto antes da figura, ocupando a linha inteira da coluna de texto até o fim.', 0.12),
+      L('Mais uma linha de texto antes da figura, terminando o parágrafo aqui.', 0.142),
+      // ... figura ocupa de 0,16 a 0,45 ...
+      L('Figura 2.1 Veículo estável', 0.46, 0.3),
+      L('O foguete é estático ou aerodinamicamente estável quando volta à posição.', 0.5),
+    ]);
+    expect(page.blocks.map((b) => b.kind)).toEqual(['p', 'fig', 'p', 'p']);
+    expect(page.blocks[1].y).toBeGreaterThan(0.2);
+    expect(page.blocks[2].caption).toBe(true);
+  });
+  it('texto corrido normal não gera paradas', () => {
+    const lines = Array.from({ length: 20 }, (_, i) => L('Linha de texto corrido normal, sem figura nenhuma no meio, até o fim.', 0.12 + i * 0.022));
+    expect(buildPage(1, lines).blocks.every((b) => b.kind === 'p')).toBe(true);
   });
 });

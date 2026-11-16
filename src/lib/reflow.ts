@@ -9,13 +9,20 @@ import type { HlRect } from './types';
 
 export interface RItem { str: string; x: number; y: number; w: number; h: number }
 export interface RPart { i: number; text: string; sep: string } // sep = texto antes da parte (espaço ou nada)
-export interface RBlock { kind: 'p' | 'h'; parts: RPart[] }
+/**
+ * p = parágrafo · h = título · f = fórmula isolada · fig = buraco no texto onde há
+ * uma figura/tabela/fórmula em imagem (sem partes; `y` = posição na página, 0–1).
+ */
+export interface RBlock { kind: 'p' | 'h' | 'f' | 'fig'; parts: RPart[]; y?: number; caption?: boolean }
 export interface RPage { num: number; items: RItem[]; blocks: RBlock[]; chars: number }
 
 /** Item cru como o pdf.js entrega, já convertido para coordenadas normalizadas. */
 export interface RawItem { str: string; x: number; y: number; w: number; h: number; eol: boolean }
 
 interface Line { items: number[]; x0: number; x1: number; top: number; bottom: number; h: number; text: string }
+
+/** Legenda de figura/tabela: indica que há algo para VER na página. */
+export const CAPTION = /^(figuras?|fig\.|tabelas?|tab\.|gr[áa]ficos?|quadros?|ilustra[çc][ãa]o|diagrama|figures?|tables?|charts?)\s*\d/i;
 
 const BAND = 0.075; // faixa de cabeçalho/rodapé (7,5% do topo e da base)
 
@@ -75,10 +82,18 @@ export function buildPage(num: number, raw: RawItem[]): RPage {
     const gapAbove = prev ? l.top - prev.bottom : 1;
     const gapBelow = next ? next.top - l.bottom : 1;
     const mathy = /[=±×÷√∑∫∂≤≥≈∞]/.test(t);
-    const isHeading = !mathy && ((big && t.length < 120) || (short && t.length < 80 && !/[.,;:?!)]$/.test(t)
+    // fórmula isolada: linha curta com símbolos matemáticos
+    const isFormula = mathy && short && t.length < 80;
+    // buraco vertical grande = figura, tabela ou fórmula em imagem naquele ponto
+    const figGap = Math.max(0.07, medH * 4.5);
+    if (prev ? gapAbove > figGap : l.top > 0.3) {
+      blocks.push({ kind: 'fig', parts: [], y: prev ? prev.bottom + gapAbove / 2 : l.top / 2 });
+      block = null;
+    }
+    const isHeading = !mathy && !CAPTION.test(t) && ((big && t.length < 120) || (short && t.length < 80 && !/[.,;:?!)]$/.test(t)
       && gapAbove > medH * 0.25 && (!next || gapBelow > medH * 0.25 || next.x0 > left + width * 0.03) && /^[\p{Lu}\d]/u.test(t) && !/^[■•▪●◦\-–]/.test(t)));
 
-    let newBlock = !block || isHeading || block.kind === 'h';
+    let newBlock = !block || isHeading || isFormula || block.kind !== 'p';
     if (!newBlock && prev) {
       const prevText = prev.text.trim();
       const prevEndsShort = prev.x1 < right - width * 0.06;
@@ -89,7 +104,11 @@ export function buildPage(num: number, raw: RawItem[]): RPage {
       else if (prevEndsShort && /[.:;?!)]$/.test(prevText)) newBlock = true;
       else if (indented && /[.:;?!]$/.test(prevText)) newBlock = true;
     }
-    if (newBlock) { block = { kind: isHeading ? 'h' : 'p', parts: [] }; blocks.push(block); }
+    if (newBlock) {
+      block = { kind: isFormula ? 'f' : isHeading ? 'h' : 'p', parts: [], y: l.top };
+      if (!isFormula && CAPTION.test(t)) block.caption = true;
+      blocks.push(block);
+    }
 
     l.items.forEach((idx, k) => {
       const it = items[idx];

@@ -127,6 +127,9 @@ const ReflowPage = memo(function ReflowPage({ pdf, num, root, hls, focusId }: {
       {(showImage || imageOnly) && <PageImage pdf={pdf} num={num} />}
       {imageOnly && <p className="muted small reflow-note">Página com pouco texto (figura, tabela ou página escaneada): mostrando a página original.</p>}
       {data && !imageOnly && data.blocks.map((b, bi) => {
+        if (b.kind === 'fig') {
+          return <button key={bi} type="button" className="fig-hint" onClick={() => setShowImage(true)}>🖼 Figura, tabela ou fórmula neste ponto · ver página original</button>;
+        }
         const covers = b.parts.map((part) => (hls ? partCoverage(num, data.items[part.i], part.text, hls) : null));
         const content = b.parts.map((part, pi) => {
           // o espaço entre dois pedaços do mesmo grifo também fica pintado
@@ -135,7 +138,9 @@ const ReflowPage = memo(function ReflowPage({ pdf, num, root, hls, focusId }: {
           const join = prev && cur && prev[prev.length - 1] && prev[prev.length - 1] === cur[0] ? cur[0] : null;
           return <Part key={pi} part={part} item={data.items[part.i]} cover={cur} sepHl={join} hls={hls} focusId={focusId} />;
         });
-        return b.kind === 'h' ? <h3 key={bi}>{content}</h3> : <p key={bi}>{content}</p>;
+        return b.kind === 'h'
+          ? <h3 key={bi} data-b={bi}>{content}</h3>
+          : <p key={bi} data-b={bi} className={b.kind === 'f' ? 'reflow-formula' : undefined}>{content}</p>;
       })}
     </section>
   );
@@ -167,8 +172,9 @@ function Part({ part, item, cover, sepHl, hls, focusId }: {
 }
 
 /** A página original como imagem, na largura da coluna de leitura. */
-function PageImage({ pdf, num }: { pdf: PDFDocumentProxy; num: number }) {
+export function PageImage({ pdf, num, focusY, zoomable }: { pdf: PDFDocumentProxy; num: number; focusY?: number; zoomable?: boolean }) {
   const ref = useRef<HTMLCanvasElement>(null);
+  const [zoom, setZoom] = useState(false);
   useEffect(() => {
     let task: { cancel: () => void; promise: Promise<void> } | null = null;
     let alive = true;
@@ -178,16 +184,24 @@ function PageImage({ pdf, num }: { pdf: PDFDocumentProxy; num: number }) {
       if (!alive || !canvas) return;
       const cssW = canvas.parentElement?.clientWidth || 600;
       const vp1 = page.getViewport({ scale: 1 });
-      const scale = (cssW / vp1.width) * Math.min(window.devicePixelRatio || 1, 2.5);
+      const scale = (cssW / vp1.width) * Math.min(window.devicePixelRatio || 1, 2.5) * (zoomable ? 1.5 : 1);
       const vp = page.getViewport({ scale });
       canvas.width = Math.floor(vp.width);
       canvas.height = Math.floor(vp.height);
       task = page.render({ canvas, canvasContext: canvas.getContext('2d')!, viewport: vp });
       await task.promise.catch(() => {});
+      // rola até a figura/fórmula que motivou a parada
+      const box = canvas.parentElement?.parentElement;
+      if (alive && focusY != null && box) box.scrollTop = Math.max(0, focusY * canvas.clientHeight - box.clientHeight / 2);
     })();
     return () => { alive = false; task?.cancel(); };
-  }, [pdf, num]);
-  return <div className="reflow-image"><canvas ref={ref} /></div>;
+  }, [pdf, num, focusY, zoomable]);
+  return (
+    <div className={`reflow-image${zoom ? ' zoomed' : ''}`} onClick={zoomable ? () => setZoom(!zoom) : undefined} title={zoomable ? 'Toque para ampliar/reduzir' : undefined}>
+      <canvas ref={ref} />
+      {focusY != null && focusY > 0 && <span className="focus-marker" style={{ top: `${focusY * 100}%` }} aria-hidden>◀</span>}
+    </div>
+  );
 }
 
 /** Converte uma seleção no modo leitura em retângulos da página original. */

@@ -11,6 +11,8 @@ import { useReadingTracker } from '../lib/useReadingTracker';
 import PdfViewer from '../components/PdfViewer';
 import ReflowViewer, { reflowRectsFromRange } from '../components/ReflowViewer';
 import DocxViewer from '../components/DocxViewer';
+import SpeedReader from '../components/SpeedReader';
+import type { HlRect } from '../lib/types';
 import CardEditor, { type Injection, type Prefill } from '../components/CardEditor';
 
 interface Sel { text: string; page: number; x: number; y: number }
@@ -65,6 +67,7 @@ export default function Reader() {
   const [marker, setMarker] = useState(false);
   const [markerColor, setMarkerColor] = useState<HighlightColor>(() => pref<HighlightColor>('cosmos:markerColor', 'yellow'));
   const [pending, setPending] = useState<{ range: Range; word: string } | null>(null);
+  const [speed, setSpeed] = useState<{ page: number; block: number } | null>(null);
   const run = useAction();
   const focusId = params.get('hl');
   const viewerRef = useRef<HTMLDivElement>(null);
@@ -187,6 +190,35 @@ export default function Reader() {
     const { text, page: p } = sel;
     clearSelection();
     await highlightRange(range, text, color, p);
+  }
+
+  // ---------- leitura rápida (uma palavra por vez)
+  function startSpeed() {
+    clearSelection();
+    cancelPending();
+    setMarker(false);
+    setCropMode(false);
+    // começa no primeiro parágrafo visível (no modo leitura) ou no início da página
+    let at = { page, block: 0 };
+    const host = viewerRef.current;
+    if (host && mode === 'reflow') {
+      const top = host.getBoundingClientRect().top + 50;
+      for (const el of host.querySelectorAll<HTMLElement>('.reflow-page [data-b]')) {
+        if (el.getBoundingClientRect().bottom > top) {
+          at = { page: Number(el.closest<HTMLElement>('[data-page]')?.dataset.page ?? page), block: Number(el.dataset.b) };
+          break;
+        }
+      }
+    }
+    setSpeed(at);
+  }
+
+  /** Grifo vindo da leitura rápida (a frase que estava sendo lida). */
+  async function highlightRects(rects: HlRect[], text: string, p: number): Promise<boolean> {
+    if (!doc || !rects.length || !text) return false;
+    const h = await run(() => createHighlight({ document_id: doc.id, page: p, text, color: markerColor, position: { rects } }), 'Frase grifada ✓');
+    if (h) setHighlights((list) => [...list, h]);
+    return !!h;
   }
 
   // ---------- marca-texto por toque: 1º toque = início, 2º toque = fim
@@ -313,6 +345,7 @@ export default function Reader() {
             <div className="btn-group" role="group" aria-label="Modo de leitura">
               <button className={`btn small ${mode === 'original' ? 'primary' : 'ghost'}`} onClick={() => switchMode('original')} title="Página original do PDF">📄<span className="hide-sm"> Original</span></button>
               <button className={`btn small ${mode === 'reflow' ? 'primary' : 'ghost'}`} onClick={() => switchMode('reflow')} title="Texto corrido, com letra ajustável (ideal no celular)">📖<span className="hide-sm"> Leitura</span></button>
+              <button className="btn small ghost" onClick={startSpeed} disabled={!pdf} title="Leitura rápida: uma palavra por vez, na velocidade que você escolher">⚡<span className="hide-sm"> Rápida</span></button>
             </div>
           )}
           <div className="btn-group">
@@ -404,6 +437,10 @@ export default function Reader() {
             <button className="btn small primary" onClick={() => newCardFrom(sel.text, undefined, sel.page)}>⚡ Gerar flashcard</button>
           )}
         </div>
+      )}
+      {speed && pdf && (
+        <SpeedReader pdf={pdf} start={speed} onPage={setPage} onHighlight={highlightRects}
+          onExit={(p) => { setSpeed(null); setPage(p); setGoto({ page: p, nonce: Date.now() }); }} />
       )}
       {hlPop && (
         <HighlightPopover hl={hlPop.hl} x={hlPop.x} y={hlPop.y}
