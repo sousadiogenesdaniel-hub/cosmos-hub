@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Link, useParams, useSearchParams } from 'react-router-dom';
 import type { Grade } from 'ts-fsrs';
 import type { CardRow, Note } from '../lib/types';
 import { deckPath } from '../lib/api';
@@ -10,6 +10,7 @@ import { useApp } from '../lib/context';
 import { useStudySession } from '../lib/useStudySession';
 import { Finished } from './Study';
 import { quietWav } from '../lib/backgroundAudio';
+import { FREE_RATINGS, readFree } from '../lib/free';
 import { decodeClip, forgetClips, renderWav, ttsSeconds, type Placement } from '../lib/audioRender';
 
 type Phase = 'question' | 'thinking' | 'answer' | 'rating';
@@ -55,7 +56,11 @@ const cardKey = (c: CardRow) => `${c.id}:${c.reps}:${c.due}`;
 export default function AudioStudy() {
   const { deckId = '' } = useParams();
   const { decks, profile } = useApp();
-  const { queue, notes, current, note, rate, dismiss, stats } = useStudySession(deckId, 'audio');
+  const [params] = useSearchParams();
+  const free = useMemo(() => readFree(params), [params]);
+  const { queue, notes, current, note, rate, dismiss, stats } = useStudySession(deckId, 'audio', free);
+  const buttons = free ? FREE_RATINGS : RATINGS;
+  const modes = free ? MODES.map((m) => (m.value === 'auto' ? { ...m, desc: 'Depois da resposta, conta como acerto sozinho e vem o próximo. Se não souber, toque em Errei na pausa (o card volta mais adiante).' } : m.value === 'wait' ? { ...m, desc: 'Depois da resposta, você toca em Errei (o card volta mais adiante) ou Acertei.' } : m)) : MODES;
   const [running, setRunning] = useState(false);
   const [paused, setPaused] = useState(false);
   const [preparing, setPreparing] = useState<string | null>(null);
@@ -305,14 +310,14 @@ export default function AudioStudy() {
 
   const title = deckPath(deckId, decks);
   if (queue === null) return <div className="center-pad"><div className="spinner" /></div>;
-  if (!current || !note) return <Finished title={title} stats={stats} deckId={deckId} />;
+  if (!current || !note) return <Finished title={title} stats={stats} deckId={deckId} free={!!free} />;
 
   const h = head();
   const shownCard = h?.card ?? current;
   const shownNote = h?.note ?? note;
   const faces = cardFaces(shownNote, shownCard.ord);
   const now = new Date();
-  const intervals = previewIntervals(shownCard, now);
+  const intervals = free ? null : previewIntervals(shownCard, now);
   const phase = view.phase;
   const missingAudio = queue.filter((c) => {
     const n = notes.get(c.note_id);
@@ -326,7 +331,7 @@ export default function AudioStudy() {
       <header className="study-head">
         <Link to="/decks" className="icon-btn" title="Sair">←</Link>
         <div className="grow">
-          <div className="study-title">🎧 {title}</div>
+          <div className="study-title">🎧 {free && <span className="free-badge">🔁 Livre</span>}{title}</div>
           <div className="small muted">{queue.length} na fila · {stats.done} revisados</div>
         </div>
       </header>
@@ -334,14 +339,15 @@ export default function AudioStudy() {
       <div className="audio-stage">
         {!running ? (
           <div className="audio-setup panel">
-            <h2>Revisão por áudio</h2>
+            <h2>{free ? 'Estudo livre por áudio' : 'Revisão por áudio'}</h2>
+            {free && <p className="muted small">Fora do agendamento: as datas de revisão dos cards não mudam.</p>}
             <p className="muted">Ouça a pergunta, pense, e a resposta toca sozinha. Cards sem áudio gravado são lidos pela voz do navegador (se ativado).</p>
             <label>Tempo para pensar: <strong>{think}s</strong>
               <input type="range" min={3} max={60} value={think} onChange={(e) => setThink(Number(e.target.value))} />
             </label>
             <label className="check"><input type="checkbox" checked={prefs.tts} onChange={(e) => setPrefs({ ...prefs, tts: e.target.checked })} /> Ler o texto em voz alta quando o card não tiver áudio</label>
             <div className="mode-pick" role="radiogroup" aria-label="Depois da resposta">
-              {MODES.map((m) => (
+              {modes.map((m) => (
                 <button key={m.value} type="button" role="radio" aria-checked={prefs.after === m.value}
                   className={`mode-opt${prefs.after === m.value ? ' on' : ''}`} onClick={() => setPrefs({ ...prefs, after: m.value })}>
                   <strong>{m.title}</strong><span>{m.desc}</span>
@@ -353,7 +359,7 @@ export default function AudioStudy() {
                 <input type="range" min={1} max={20} value={prefs.gap} onChange={(e) => setPrefs({ ...prefs, gap: Number(e.target.value) })} />
               </label>
             )}
-            <p className="muted small">Fone ou tela de bloqueio: ⏯ pausa · ⏭ = Bom · ⏮ = Errei (no modo Só ouvir: ⏭ pula e ⏮ repete).</p>
+            <p className="muted small">Fone ou tela de bloqueio: ⏯ pausa · ⏭ = {free ? 'Acertei' : 'Bom'} · ⏮ = Errei (no modo Só ouvir: ⏭ pula e ⏮ repete).</p>
             <p className="muted small">🔒 Pode bloquear a tela: os cards viram uma faixa de áudio contínua, que toca como música.{prefs.after === 'wait' ? ' No "Eu avalio", depois de cada resposta avalie pelos botões da tela de bloqueio ou do fone.' : ''}</p>
             {missingAudio > 0 && prefs.tts && (
               <p className="notice small">{missingAudio} de {queue.length} cards não têm áudio gravado e serão lidos pela voz do celular. Essa voz só funciona com o app aberto na tela: com a tela bloqueada, esses trechos ficam em silêncio. Para estudar caminhando, grave os áudios dos cards.</p>
@@ -388,10 +394,10 @@ export default function AudioStudy() {
 
       {running && prefs.after !== 'listen' && (
         <footer className="study-actions">
-          <div className="ratings big-touch">
-            {RATINGS.map((r) => (
-              <button key={r.grade} className={`rate ${r.cls}`} onClick={() => doRate(r.grade)} disabled={paused || !!preparing}>
-                <span className="rate-int">{fmtInterval(now, intervals[r.grade])}</span>
+          <div className={`ratings big-touch${free ? ' two' : ''}`}>
+            {buttons.map((r) => (
+              <button key={r.grade} className={`rate ${r.cls}`} onClick={() => doRate(r.grade as Grade)} disabled={paused || !!preparing}>
+                <span className="rate-int">{intervals ? fmtInterval(now, intervals[r.grade]) : ''}</span>
                 <span>{r.label}</span>
               </button>
             ))}

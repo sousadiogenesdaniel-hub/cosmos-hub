@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import type { Grade } from 'ts-fsrs';
 import { deckPath } from '../lib/api';
 import { cardFaces } from '../lib/cards';
@@ -11,11 +11,15 @@ import { AudioButton, StoredImage, YouTubeEmbed } from '../components/Media';
 import Modal from '../components/Modal';
 import CardEditor from '../components/CardEditor';
 import { cardsPerMinute, fmtRate, pct } from '../lib/stats';
+import { FREE_RATINGS, readFree } from '../lib/free';
 
 export default function Study() {
   const { deckId = '' } = useParams();
   const { decks } = useApp();
-  const { queue, current, note, rate, skip, stats, replaceNote } = useStudySession(deckId, 'normal');
+  const [params] = useSearchParams();
+  const free = useMemo(() => readFree(params), [params]);
+  const { queue, current, note, rate, skip, stats, replaceNote } = useStudySession(deckId, 'normal', free);
+  const buttons = free ? FREE_RATINGS : RATINGS;
   const [revealed, setRevealed] = useState(false);
   const [showVideo, setShowVideo] = useState(false);
   const [editing, setEditing] = useState(false);
@@ -40,7 +44,7 @@ export default function Study() {
       if (!revealed && (e.key === ' ' || e.key === 'Enter')) { e.preventDefault(); setRevealed(true); return; }
       if (revealed) {
         if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); answer(3 as Grade); }
-        const r = RATINGS.find((x) => x.key === e.key);
+        const r = buttons.find((x) => x.key === e.key);
         if (r) answer(r.grade);
       }
     };
@@ -51,10 +55,10 @@ export default function Study() {
   const title = deckPath(deckId, decks);
 
   if (queue === null) return <div className="center-pad"><div className="spinner" /></div>;
-  if (!current || !note) return <Finished title={title} stats={stats} deckId={deckId} />;
+  if (!current || !note) return <Finished title={title} stats={stats} deckId={deckId} free={!!free} />;
 
   const faces = cardFaces(note, current.ord);
-  const intervals = revealed ? previewIntervals(current) : null;
+  const intervals = revealed && !free ? previewIntervals(current) : null;
   const now = new Date();
   const remaining = { n: queue.filter((c) => c.state === 0).length, l: queue.filter((c) => c.state === 1 || c.state === 3).length, r: queue.filter((c) => c.state === 2).length };
 
@@ -63,8 +67,10 @@ export default function Study() {
       <header className="study-head">
         <Link to="/decks" className="icon-btn" title="Sair">←</Link>
         <div className="grow">
-          <div className="study-title">{title}</div>
-          <div className="small"><span className="count new">{remaining.n}</span> · <span className="count learn">{remaining.l}</span> · <span className="count review">{remaining.r}</span></div>
+          <div className="study-title">{free && <span className="free-badge">🔁 Livre</span>}{title}</div>
+          {free
+            ? <div className="small muted">{queue.length} restante{queue.length === 1 ? '' : 's'} · {stats.done} feitos</div>
+            : <div className="small"><span className="count new">{remaining.n}</span> · <span className="count learn">{remaining.l}</span> · <span className="count review">{remaining.r}</span></div>}
         </div>
         <button className={`btn small ${autoAudio ? 'primary' : 'ghost'}`} onClick={toggleAutoAudio}
           title={autoAudio ? 'Áudio dos cards toca sozinho (toque para desligar)' : 'Áudio dos cards só toca quando você aperta (toque para tocar sozinho)'}>
@@ -98,10 +104,10 @@ export default function Study() {
         {!revealed ? (
           <button className="btn primary big" onClick={() => setRevealed(true)}>Mostrar resposta <kbd>espaço</kbd></button>
         ) : (
-          <div className="ratings">
-            {RATINGS.map((r) => (
-              <button key={r.grade} className={`rate ${r.cls}`} onClick={() => answer(r.grade)}>
-                <span className="rate-int">{intervals ? fmtInterval(now, intervals[r.grade]) : ''}</span>
+          <div className={`ratings${free ? ' two' : ''}`}>
+            {buttons.map((r) => (
+              <button key={r.grade} className={`rate ${r.cls}`} onClick={() => answer(r.grade as Grade)}>
+                <span className="rate-int">{intervals ? fmtInterval(now, intervals[r.grade]) : free ? (r.grade === 1 ? 'repete daqui a pouco' : 'sem mudar a agenda') : ''}</span>
                 <span>{r.label}</span>
                 <kbd>{r.key}</kbd>
               </button>
@@ -119,13 +125,13 @@ export default function Study() {
   );
 }
 
-export function Finished({ title, stats, deckId }: { title: string; stats: SessionStats; deckId: string }) {
+export function Finished({ title, stats, deckId, free = false }: { title: string; stats: SessionStats; deckId: string; free?: boolean }) {
   const nav = useNavigate();
   return (
     <div className="center-screen">
       <div className="panel narrow center">
         <div className="big-emoji" aria-hidden>✦</div>
-        <h1>Tudo em dia!</h1>
+        <h1>{free ? 'Estudo livre concluído!' : 'Tudo em dia!'}</h1>
         <p className="muted">{title}</p>
         {stats.done > 0 ? (
           <div className="kpis compact">
@@ -134,10 +140,11 @@ export function Finished({ title, stats, deckId }: { title: string; stats: Sessi
             <div className="kpi"><span className="kpi-v">{fmtRate(cardsPerMinute(stats.done, stats.ms))}</span><span className="kpi-l">cards/min</span></div>
             <div className="kpi"><span className="kpi-v">{pct(stats.correct, stats.done)}</span><span className="kpi-l">acertos</span></div>
           </div>
-        ) : <p>Nenhum card para revisar neste deck agora.</p>}
+        ) : <p>{free ? 'Nenhum card com essas opções.' : 'Nenhum card para revisar neste deck agora.'}</p>}
+        {free && stats.done > 0 && <p className="muted small">As datas de revisão dos cards não mudaram.</p>}
         <div className="row center gap-s wrap">
           <button className="btn" onClick={() => nav('/decks')}>Voltar aos decks</button>
-          <button className="btn ghost" onClick={() => nav(`/decks/${deckId}/cards`)}>Ver cards</button>
+          <button className="btn ghost" onClick={() => nav(`/livre/${deckId}`)}>🔁 {free ? 'Outro estudo livre' : 'Estudo livre'}</button>
           <button className="btn primary" onClick={() => nav('/')}>Início</button>
         </div>
       </div>

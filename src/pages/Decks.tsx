@@ -104,10 +104,17 @@ function DeckNode(p: NodeProps) {
         <span className={`count learn${counts?.learn ? '' : ' zero'}`}>{counts?.learn ?? '·'}</span>
         <span className={`count review${counts?.review ? '' : ' zero'}`}>{counts?.review ?? '·'}</span>
         <span className="deck-actions">
-          <button className="btn small primary" disabled={!total} onClick={() => nav(`/estudar/${deck.id}`)}>Estudar</button>
-          <button className="btn small ghost" disabled={!total} onClick={() => nav(`/audio/${deck.id}`)} title="Revisão por áudio (para estudar caminhando)">🎧</button>
+          {total || !counts ? (
+            <>
+              <button className="btn small primary" disabled={!total} onClick={() => nav(`/estudar/${deck.id}`)}>Estudar</button>
+              <button className="btn small ghost" disabled={!total} onClick={() => nav(`/audio/${deck.id}`)} title="Revisão por áudio (para estudar caminhando)">🎧</button>
+            </>
+          ) : (
+            <button className="btn small" onClick={() => nav(`/livre/${deck.id}`)} title="Em dia! Revisar mesmo assim, sem mudar o agendamento">🔁 Livre</button>
+          )}
           <DeckMenu items={[
             ['＋ Adicionar card', () => p.onAddCard(deck.id)],
+            ['🔁 Estudo livre (fora da agenda)', () => nav(`/livre/${deck.id}`)],
             ['☰ Ver / editar cards', () => nav(`/decks/${deck.id}/cards`)],
             ['↳ Novo subdeck', () => p.onSubdeck(deck.id)],
             ['⚙ Opções do deck', () => p.onSettings(deck)],

@@ -590,3 +590,9 @@ mark.hl-pink { background: var(--hl-pink); }
   .reader-tools .btn.small { padding: 5px 8px; }
   .page-jump input { width: 44px; padding: 5px 4px; }
 }
+
+/* ---------------------------- Estudo livre --------------------------- */
+.free-badge { display: inline-block; margin-right: 8px; font-size: 0.72rem; font-weight: 700; color: var(--accent-ink); background: var(--accent); border-radius: 6px; padding: 1px 7px; vertical-align: middle; }
+.ratings.two { grid-template-columns: repeat(2, 1fr); max-width: 460px; }
+.narrow-page { max-width: 640px; }
+.free-count { margin: 0; font-size: 1.05rem; }

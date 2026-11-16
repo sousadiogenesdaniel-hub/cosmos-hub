@@ -222,6 +222,14 @@ export async function saveReview(card: CardRow, next: SchedulingFields, rating: 
   }));
 }
 
+/** Estudo livre: registra o tempo/resultado nas métricas, SEM alterar o agendamento do card. */
+export async function logFreeReview(card: CardRow, rating: number, durationMs: number, mode: 'livre' | 'livre-audio') {
+  check(await supabase.from('review_logs').insert({
+    card_id: card.id, deck_id: card.deck_id, rating, state_before: card.state,
+    duration_ms: Math.round(durationMs), mode, day: localDay(),
+  }));
+}
+
 // ------------------------------------------------------------- Métricas
 export async function listReviewLogs(sinceDay: string): Promise<ReviewLog[]> {
   return fetchAll<ReviewLog>((f, t) => supabase.from('review_logs').select('*').gte('day', sinceDay).order('reviewed_at').range(f, t));

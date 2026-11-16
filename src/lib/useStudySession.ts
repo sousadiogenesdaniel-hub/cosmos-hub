@@ -1,16 +1,20 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Grade } from 'ts-fsrs';
 import type { CardRow, Note } from './types';
-import { getNotes, listCards, listReviewLogs, saveReview, subtreeIds } from './api';
-import { localDay } from './dates';
+import { getNotes, listCards, listReviewLogs, logFreeReview, saveReview, subtreeIds } from './api';
+import { addDays, localDay } from './dates';
+import { ERRORS_DAYS, selectFree, type FreeOptions } from './free';
 import { deckQueue } from './queue';
 import { LEARN_AHEAD_MS, schedule } from './srs';
 import { useApp } from './context';
 
 export interface SessionStats { done: number; correct: number; ms: number }
 
-/** Carrega a fila de um deck e aplica as avaliações (FSRS) salvando no banco. */
-export function useStudySession(deckId: string, mode: 'normal' | 'audio') {
+/**
+ * Carrega a fila de um deck e aplica as avaliações (FSRS) salvando no banco.
+ * Com `free`, é estudo livre: cards escolhidos fora do agendamento e nada é reagendado.
+ */
+export function useStudySession(deckId: string, mode: 'normal' | 'audio', free: FreeOptions | null = null) {
   const { decks, toast } = useApp();
   const [queue, setQueue] = useState<CardRow[] | null>(null);
   const [notes, setNotes] = useState<Map<string, Note>>(new Map());
@@ -20,8 +24,9 @@ export function useStudySession(deckId: string, mode: 'normal' | 'audio') {
   const load = useCallback(async () => {
     try {
       const ids = subtreeIds(deckId, decks);
-      const [cards, today] = await Promise.all([listCards(ids), listReviewLogs(localDay())]);
-      const q = deckQueue(deckId, decks, cards, today);
+      const since = free ? addDays(localDay(), -ERRORS_DAYS) : localDay();
+      const [cards, logs] = await Promise.all([listCards(ids), listReviewLogs(since)]);
+      const q = free ? selectFree(cards, logs, free) : deckQueue(deckId, decks, cards, logs);
       const ns = await getNotes([...new Set(q.map((c) => c.note_id))]);
       setNotes(new Map(ns.map((n) => [n.id, n])));
       setQueue(q);
@@ -29,7 +34,7 @@ export function useStudySession(deckId: string, mode: 'normal' | 'audio') {
       toast(e instanceof Error ? e.message : String(e), 'error');
       setQueue([]);
     }
-  }, [deckId, decks, toast]);
+  }, [deckId, decks, toast, free?.sel, free?.n, free?.includeNew, free?.shuffle]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (!decks.length || loaded.current) return;
@@ -41,6 +46,19 @@ export function useStudySession(deckId: string, mode: 'normal' | 'audio') {
 
   const rate = useCallback(async (card: CardRow, grade: Grade, durationMs: number) => {
     const ms = Math.min(durationMs, mode === 'audio' ? 180000 : 60000); // limita tempo ocioso
+    if (free) {
+      // estudo livre: errou → volta 3 cards adiante; acertou → sai. Agendamento intacto.
+      setQueue((q) => {
+        if (!q) return q;
+        const at = q.findIndex((c) => c.id === card.id);
+        const rest = at === -1 ? [...q] : [...q.slice(0, at), ...q.slice(at + 1)];
+        if (grade === 1) rest.splice(Math.min(rest.length, 3), 0, { ...card, due: new Date().toISOString() });
+        return rest;
+      });
+      setStats((s) => ({ done: s.done + 1, correct: s.correct + (grade > 1 ? 1 : 0), ms: s.ms + ms }));
+      try { await logFreeReview(card, grade, ms, mode === 'audio' ? 'livre-audio' : 'livre'); } catch { /* métrica opcional */ }
+      return;
+    }
     const next = schedule(card, grade);
     const updated: CardRow = { ...card, ...next };
     setQueue((q) => {
@@ -62,7 +80,7 @@ export function useStudySession(deckId: string, mode: 'normal' | 'audio') {
     } catch (e) {
       toast(`Falha ao salvar a revisão: ${e instanceof Error ? e.message : e}`, 'error');
     }
-  }, [mode, toast]);
+  }, [mode, toast, free]);
 
   /** Pula o card sem avaliar (vai para o fim da fila). */
   const skip = useCallback(() => setQueue((q) => (q && q.length > 1 ? [...q.slice(1), q[0]] : q)), []);

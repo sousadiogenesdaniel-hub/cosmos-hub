@@ -83,7 +83,7 @@ export default function Home() {
 
         <section className="panel">
           <div className="row between"><h2>Para revisar</h2><Link to="/decks" className="small">todos os decks</Link></div>
-          {roots.length === 0 ? <p className="muted">{decks.length ? 'Tudo em dia ✦' : 'Crie seu primeiro deck em Flashcards.'}</p> : (
+          {roots.length === 0 ? <p className="muted">{decks.length ? <>Tudo em dia ✦ Quer revisar mesmo assim? Em <Link to="/decks">Flashcards</Link>, toque em <strong>🔁 Livre</strong> no deck.</> : 'Crie seu primeiro deck em Flashcards.'}</p> : (
             <ul className="due-list">
               {roots.slice(0, 6).map(({ d, c }) => (
                 <li key={d.id}>

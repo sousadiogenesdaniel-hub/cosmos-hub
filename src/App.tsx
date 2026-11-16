@@ -16,6 +16,7 @@ import Progress from './pages/Progress';
 import ProfilePage from './pages/Profile';
 import HighlightReview from './pages/HighlightReview';
 import HighlightExport from './pages/HighlightExport';
+import FreeSetup from './pages/FreeSetup';
 
 export default function App() {
   const [session, setSession] = useState<Session | null | undefined>(undefined);
@@ -41,6 +42,7 @@ export default function App() {
           <Route path="/decks/:deckId/cards" element={<Browse />} />
           <Route path="/estudar/:deckId" element={<Study />} />
           <Route path="/audio/:deckId" element={<AudioStudy />} />
+          <Route path="/livre/:deckId" element={<FreeSetup />} />
           <Route path="/evolucao" element={<Progress />} />
           <Route path="/perfil" element={<ProfilePage />} />
         </Route>
