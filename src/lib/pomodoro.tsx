@@ -63,6 +63,7 @@ export function PomodoroProvider({ children }: { children: ReactNode }) {
   const audio = useRef<HTMLAudioElement | null>(null);
   const audioUrl = useRef<string | null>(null);
   const lastPhase = useRef<PomoPhase | null>(null);
+  const intentional = useRef(false); // pausa feita pelo próprio app (não pelo sistema)
 
   const focusMin = profile?.pomodoro_focus ?? 25;
   const breakMin = profile?.pomodoro_break ?? 5;
@@ -80,15 +81,25 @@ export function PomodoroProvider({ children }: { children: ReactNode }) {
 
   // ---------- faixa de áudio (alarme com a tela bloqueada)
   const stopAudio = useCallback(() => {
+    intentional.current = true;
     audio.current?.pause();
+    intentional.current = false;
     setSoundOn(false);
   }, []);
 
   /** Monta a faixa do ciclo e toca a partir da posição certa. Precisa vir de um toque. */
   const playAudio = useCallback((r: Run) => {
     const c = { focus: r.focusMin * 60, brk: r.breakMin * 60 };
-    const a = audio.current ?? (audio.current = new Audio());
-    a.setAttribute('playsinline', '');
+    let a = audio.current;
+    if (!a) {
+      a = audio.current = new Audio();
+      a.setAttribute('playsinline', '');
+      // se o sistema parar a faixa (bateria, outro app de música…), o app percebe:
+      // volta a tocar o alarme pelo modo normal e mostra o botão para reativar
+      a.addEventListener('pause', () => { if (!intentional.current) setSoundOn(false); });
+      a.addEventListener('ended', () => setSoundOn(false));
+      a.addEventListener('playing', () => setSoundOn(true));
+    }
     const key = `${c.focus}-${c.brk}`;
     if (a.dataset.key !== key) {
       if (audioUrl.current) URL.revokeObjectURL(audioUrl.current);

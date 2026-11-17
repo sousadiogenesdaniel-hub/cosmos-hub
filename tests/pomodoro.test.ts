@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { AUDIO_RATE, audioPosition, cycleLength, cycleWav, fmtClock, focusesDone, phaseAt, skipSeconds } from '../src/lib/pomodoroTimeline';
+import { AUDIO_RATE, NOISE, audioPosition, cycleLength, cycleWav, fmtClock, focusesDone, phaseAt, skipSeconds } from '../src/lib/pomodoroTimeline';
 
 const c = { focus: 25 * 60, brk: 5 * 60 };
 const len = cycleLength(c); // 1500 + 8 + 300 + 3 = 1811
@@ -31,14 +31,25 @@ describe('pomodoro: linha do tempo', () => {
     expect(fmtClock(61.2)).toBe('1:02');
     expect(fmtClock(3700)).toBe('1:01:40');
   });
-  it('faixa de áudio: silêncio no foco, alarme na hora certa, tamanho leve', async () => {
+  it('faixa de áudio: nunca é silêncio absoluto, alarme na hora certa, tamanho leve', async () => {
     const blob = cycleWav(c);
-    const data = new Uint8Array(await blob.arrayBuffer()).subarray(44);
-    expect(blob.size).toBeLessThan(8 * 1024 * 1024); // ~7 MB para 25+5 min
-    const loud = (t0: number, t1: number) => { let m = 0; for (let i = t0 * AUDIO_RATE; i < t1 * AUDIO_RATE; i++) m = Math.max(m, Math.abs(data[i] - 128)); return m; };
-    expect(loud(0, 1499)).toBe(0);         // foco: silêncio total
-    expect(loud(1500, 1503)).toBeGreaterThan(60); // alarme de fim de foco
-    expect(loud(1504, 1807)).toBe(0);      // pausa: silêncio
-    expect(loud(1808, 1811)).toBeGreaterThan(60); // alarme de fim de pausa
+    const buf = await blob.arrayBuffer();
+    const v = new DataView(buf);
+    expect(v.getUint32(24, true)).toBe(AUDIO_RATE);
+    expect(v.getUint16(34, true)).toBe(16);
+    const n = (buf.byteLength - 44) / 2;
+    const at = (i: number) => v.getInt16(44 + i * 2, true) / 32768;
+    expect(blob.size).toBeLessThan(12 * 1024 * 1024); // ~10 MB para 25+5 min
+    const rmsDb = (t0: number, t1: number) => { let sum = 0, k = 0; for (let i = t0 * AUDIO_RATE; i < Math.min(n, t1 * AUDIO_RATE); i++) { sum += at(i) ** 2; k++; } return 20 * Math.log10(Math.sqrt(sum / k) + 1e-12); };
+    const peak = (t0: number, t1: number) => { let m = 0; for (let i = t0 * AUDIO_RATE; i < t1 * AUDIO_RATE; i++) m = Math.max(m, Math.abs(at(i))); return m; };
+    // foco e pausa: abaixo do audível, mas acima do limite de "página muda" do Chrome (≈ -72 dBFS)
+    for (const [a, b] of [[0, 1499], [1504, 1807]]) {
+      const db = rmsDb(a, b);
+      expect(db).toBeLessThan(-55);
+      expect(db).toBeGreaterThan(-70);
+    }
+    expect(peak(1500, 1503)).toBeGreaterThan(0.5);   // alarme de fim de foco
+    expect(peak(1808, 1811)).toBeGreaterThan(0.5);   // alarme de fim de pausa
+    expect(NOISE).toBeLessThan(0.002);
   });
 });
