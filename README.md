@@ -23,6 +23,8 @@ Seu hub pessoal de estudo: **biblioteca de PDFs/Word → flashcards → revisão
 3. Em **Project Settings → API** (ou **Connect**), copie a **Project URL** e a chave **anon public**.
 4. Em **Authentication → Sign In / Providers → Email**, desligue **Confirm email** se não quiser confirmar por e-mail (opcional).
 
+> **Atualizações do banco:** depois do `schema.sql`, rode também, na ordem, os arquivos de [`supabase/migrations/`](supabase/migrations/) que ainda não rodou (`002_grifos_e_lido.sql`, `003_pomodoro.sql`). Todos podem ser rodados de novo sem problema.
+
 ### 2. Vercel (hospedagem do site)
 
 1. Suba esta pasta para um repositório **privado** no seu GitHub.

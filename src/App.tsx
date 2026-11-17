@@ -1,22 +1,28 @@
-import { useEffect, useState } from 'react';
+import { lazy, Suspense, useEffect, useState } from 'react';
 import { Route, Routes, Navigate } from 'react-router-dom';
 import type { Session } from '@supabase/supabase-js';
 import { supabase, isConfigured } from './lib/supabase';
 import { AppProvider } from './lib/context';
+import { PomodoroProvider } from './lib/pomodoro';
 import Layout from './components/Layout';
 import Login from './pages/Login';
 import Home from './pages/Home';
-import Library from './pages/Library';
-import Reader from './pages/Reader';
-import Decks from './pages/Decks';
-import Browse from './pages/Browse';
-import Study from './pages/Study';
-import AudioStudy from './pages/AudioStudy';
-import Progress from './pages/Progress';
-import ProfilePage from './pages/Profile';
-import HighlightReview from './pages/HighlightReview';
-import HighlightExport from './pages/HighlightExport';
-import FreeSetup from './pages/FreeSetup';
+
+// As outras telas só são baixadas quando você abre cada uma (o leitor de PDF é o maior pedaço).
+const Library = lazy(() => import('./pages/Library'));
+const Reader = lazy(() => import('./pages/Reader'));
+const Decks = lazy(() => import('./pages/Decks'));
+const Browse = lazy(() => import('./pages/Browse'));
+const Study = lazy(() => import('./pages/Study'));
+const AudioStudy = lazy(() => import('./pages/AudioStudy'));
+const Progress = lazy(() => import('./pages/Progress'));
+const ProfilePage = lazy(() => import('./pages/Profile'));
+const HighlightReview = lazy(() => import('./pages/HighlightReview'));
+const HighlightExport = lazy(() => import('./pages/HighlightExport'));
+const FreeSetup = lazy(() => import('./pages/FreeSetup'));
+const PomodoroPage = lazy(() => import('./pages/Pomodoro'));
+
+const Loading = () => <div className="center-pad"><div className="spinner" /></div>;
 
 export default function App() {
   const [session, setSession] = useState<Session | null | undefined>(undefined);
@@ -34,6 +40,8 @@ export default function App() {
 
   return (
     <AppProvider key={session.user.id}>
+      <PomodoroProvider>
+      <Suspense fallback={<Loading />}>
       <Routes>
         <Route element={<Layout />}>
           <Route path="/" element={<Home />} />
@@ -43,6 +51,7 @@ export default function App() {
           <Route path="/estudar/:deckId" element={<Study />} />
           <Route path="/audio/:deckId" element={<AudioStudy />} />
           <Route path="/livre/:deckId" element={<FreeSetup />} />
+          <Route path="/pomodoro" element={<PomodoroPage />} />
           <Route path="/evolucao" element={<Progress />} />
           <Route path="/perfil" element={<ProfilePage />} />
         </Route>
@@ -51,6 +60,8 @@ export default function App() {
         <Route path="/grifos/exportar" element={<HighlightExport />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
+      </Suspense>
+      </PomodoroProvider>
     </AppProvider>
   );
 }

@@ -8,6 +8,7 @@ import { mustStatus } from '../lib/musts';
 import { emptyDay, goalFraction, goalValue, statsByDay } from '../lib/stats';
 import { useApp, useAction } from '../lib/context';
 import { Heatmap } from '../components/Charts';
+import PomodoroCard from '../components/PomodoroCard';
 
 const GOAL_UNIT = { cards: 'cards', minutes: 'min', pages: 'páginas' };
 
@@ -63,6 +64,8 @@ export default function Home() {
           <p className="center">{frac >= 1 ? '🎉 Meta batida!' : frac >= 0.5 ? 'Mais da metade — continue!' : 'Bora começar?'}</p>
           <p className="muted small center">{todayStats.cards} cards · {todayStats.pages} páginas · {fmtDuration(todayStats.reviewMs + todayStats.readingMs)}</p>
         </section>
+
+        <PomodoroCard />
 
         <section className="panel">
           <div className="row between"><h2>Obrigatórios do dia</h2><Link to="/perfil#metas" className="small">editar</Link></div>

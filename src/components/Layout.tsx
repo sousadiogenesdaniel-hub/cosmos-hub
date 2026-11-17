@@ -1,4 +1,6 @@
+import { Suspense } from 'react';
 import { NavLink, Outlet } from 'react-router-dom';
+import PomodoroChip from './PomodoroChip';
 import { useApp } from '../lib/context';
 import Logo from './Logo';
 
@@ -27,7 +29,10 @@ export default function Layout() {
         {profile?.name && <div className="sidebar-user">{profile.name}</div>}
       </aside>
       <main className="content">
-        <Outlet />
+        <Suspense fallback={<div className="center-pad"><div className="spinner" /></div>}>
+          <Outlet />
+        </Suspense>
+        <PomodoroChip />
       </main>
     </div>
   );

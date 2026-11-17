@@ -9,6 +9,9 @@ export interface Profile {
   daily_goal_type: GoalType;
   daily_goal_value: number;
   audio_think_seconds: number;
+  pomodoro_focus?: number;
+  pomodoro_break?: number;
+  pomodoro_goal?: number;
 }
 
 export interface DocumentRow {
@@ -134,3 +137,5 @@ export interface Highlight {
   created_at: string;
   updated_at: string;
 }
+
+export interface PomodoroRow { id: string; day: string; started_at: string; minutes: number }

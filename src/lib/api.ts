@@ -1,7 +1,7 @@
 import { supabase, BUCKET } from './supabase';
 import { cardOrds } from './cards';
 import { localDay } from './dates';
-import type { CardRow, DailyMust, Deck, DocumentRow, Highlight, Note, NoteType, Profile, ReadingLog, ReviewLog } from './types';
+import type { CardRow, DailyMust, Deck, DocumentRow, Highlight, Note, PomodoroRow, NoteType, Profile, ReadingLog, ReviewLog } from './types';
 import type { SchedulingFields } from './srs';
 
 function check<T>(res: { data: T | null; error: { message: string } | null }): T {
@@ -271,4 +271,13 @@ export async function updateHighlight(id: string, patch: Partial<Pick<Highlight,
 
 export async function deleteHighlight(id: string) {
   check(await supabase.from('highlights').delete().eq('id', id));
+}
+
+// ------------------------------------------------------------ Pomodoro
+export async function logPomodoro(p: { day: string; started_at: string; minutes: number }) {
+  check(await supabase.from('pomodoros').insert(p));
+}
+
+export async function listPomodoros(sinceDay: string): Promise<PomodoroRow[]> {
+  return fetchAll<PomodoroRow>((f, t) => supabase.from('pomodoros').select('id,day,started_at,minutes').gte('day', sinceDay).order('started_at').range(f, t));
 }

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
-import type { DocumentRow, ReadingLog, ReviewLog } from '../lib/types';
-import { listDocuments, listReadingLogs, listReviewLogs, rootDeckId } from '../lib/api';
+import type { DocumentRow, PomodoroRow, ReadingLog, ReviewLog } from '../lib/types';
+import { listDocuments, listPomodoros, listReadingLogs, listReviewLogs, rootDeckId } from '../lib/api';
 import { addDays, dayRange, fmtDuration, localDay } from '../lib/dates';
 import { PAGE_MIN_SECONDS, cardsPerMinute, emptyDay, fmtRate, goalFraction, goalValue, groupReviews, pct, statsByDay, streak } from '../lib/stats';
 import { useApp, useAction } from '../lib/context';
@@ -21,6 +21,7 @@ export default function Progress() {
   const [reviews, setReviews] = useState<ReviewLog[] | null>(null);
   const [reading, setReading] = useState<ReadingLog[]>([]);
   const [docs, setDocs] = useState<DocumentRow[]>([]);
+  const [pomos, setPomos] = useState<PomodoroRow[]>([]);
   const [period, setPeriod] = useState(30);
   const [metric, setMetric] = useState<Metric>('cards');
   const run = useAction();
@@ -31,6 +32,7 @@ export default function Progress() {
     run(() => Promise.all([listReviewLogs(since), listReadingLogs(since), listDocuments()])).then((r) => {
       if (r) { setReviews(r[0]); setReading(r[1]); setDocs(r[2]); }
     });
+    listPomodoros(since).then(setPomos).catch(() => {}); // opcional (atualização 003)
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const goalType = profile?.daily_goal_type ?? 'cards';
@@ -89,6 +91,7 @@ export default function Progress() {
         <div className="kpi"><span className="kpi-l">Últimos 30 dias</span><span className="kpi-v">{count(addDays(today, -29))}</span></div>
         <div className="kpi"><span className="kpi-l">Páginas hoje</span><span className="kpi-v">{todayReading.length}</span></div>
         <div className="kpi"><span className="kpi-l">Páginas em 7 dias</span><span className="kpi-v">{pages7}</span></div>
+        <div className="kpi"><span className="kpi-l">🍅 Pomodoros hoje</span><span className="kpi-v">{pomos.filter((x) => x.day === today).length}<small>/{profile?.pomodoro_goal ?? 4}</small></span></div>
       </section>
 
       <section className="panel">
@@ -107,6 +110,7 @@ export default function Progress() {
         <div className="kpi"><span className="kpi-l">Tempo nos cards</span><span className="kpi-v">{fmtDuration(reviewMs)}</span></div>
         <div className="kpi"><span className="kpi-l">Tempo lendo</span><span className="kpi-v">{fmtDuration(readingMs)}</span></div>
         <div className="kpi"><span className="kpi-l">Páginas lidas</span><span className="kpi-v">{pages}</span></div>
+        <div className="kpi"><span className="kpi-l">🍅 Pomodoros</span><span className="kpi-v">{pomos.filter((x) => x.day >= sinceDay).length}<small> · {Math.round(pomos.filter((x) => x.day >= sinceDay).reduce((s, x) => s + x.minutes, 0) / 60)}h</small></span></div>
         <div className="kpi"><span className="kpi-l">Arquivos concluídos</span><span className="kpi-v">{finishedInPeriod}</span></div>
         <div className="kpi"><span className="kpi-l">Dias com estudo</span><span className="kpi-v">{activeDays}<small>/{period}</small></span></div>
       </section>
